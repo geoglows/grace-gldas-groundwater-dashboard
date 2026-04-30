@@ -1,3 +1,9 @@
+// Loaded FIRST so Supabase Auth's onAuthStateChange listener is registered
+// before any of grace's top-level zarr awaits (line ~110) start. INITIAL_SESSION
+// fires once Supabase JS finishes detectSessionInUrl; if we're awaiting zarr
+// when it fires, the listener doesn't exist yet and we miss the event.
+import "./auth-bootstrap.js";
+
 import "./style.css";
 import "./modal.css"
 
