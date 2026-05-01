@@ -26,6 +26,36 @@ body {
     font-size: 24px;
 }
 
+.nav-bar .back-to-portal {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    margin-left: 16px;
+    color: #003a4d;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.45);
+    transition: background 0.15s ease;
+}
+
+.nav-bar .back-to-portal:hover,
+.nav-bar .back-to-portal:focus-visible {
+    background: rgba(255, 255, 255, 0.75);
+    outline: none;
+}
+
+.nav-bar .back-to-portal-icon {
+    width: 18px;
+    height: 18px;
+    color: #1d4ed8;
+    flex-shrink: 0;
+}
+
 .nav-bar .nav-buttons {
     display: flex;
     gap: 10px;

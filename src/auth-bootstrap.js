@@ -51,7 +51,12 @@ function renderSlot() {
   // Surgical: only the slot's innerHTML is replaced. The surrounding
   // .nav-bar and .body are left alone — grace's ArcGIS map components have
   // lifecycles that must not be torn down on auth-state changes.
-  el.innerHTML = renderAuthAction(authState);
+  // Profile link points at the portal's #profile route. Root-relative
+  // "/#profile" works because grace is reached via the portal proxy in
+  // production (same origin as apps.geoglows). The hash-only "#profile"
+  // default would be a same-document hash change here — it would NOT
+  // navigate to apps.geoglows.
+  el.innerHTML = renderAuthAction(authState, { profileHref: "/#profile" });
 
   // Re-bind handlers on the freshly-rendered children every time. The
   // renderAuthAction output owns three stable IDs:
