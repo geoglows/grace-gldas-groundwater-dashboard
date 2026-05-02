@@ -5,6 +5,17 @@
   <link rel="icon" type="image/svg+xml" href="/vite.svg"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>GRACE Regional Groundwater Analyst</title>
+  <script>
+    // Capture window.location synchronously BEFORE the module bundle is
+    // fetched so the password-recovery snapshot in src/auth-bootstrap.js
+    // can read the original hash even after Supabase JS has consumed and
+    // cleared it. Bundler module-evaluation ordering doesn't always match
+    // source-level import order — see aquiferx 2026-05-01 race fix.
+    window.__GEOGLOWS_INITIAL_URL__ = {
+      hash: window.location.hash,
+      search: window.location.search,
+    };
+  </script>
   <script type="module" src="/src/main.js" defer></script>
 </head>
 <body>
