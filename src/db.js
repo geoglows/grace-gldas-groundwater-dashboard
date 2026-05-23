@@ -2,7 +2,9 @@
 import {FetchStore, get, open} from "zarrita";
 
 const DB_NAME = "gldas-zarr-cache";
-const DB_VERSION = 1;
+// Bump when the cached grid changes (e.g. 0.25deg -> 0.5deg GRACE) so stale
+// lat/lon coords are cleared and refetched to match the current zarr.
+const DB_VERSION = 2;
 const STORE_NAME = "arrays";
 
 function openCacheDB() {
@@ -11,9 +13,11 @@ function openCacheDB() {
 
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, {keyPath: "key"});
+      // Drop and recreate the store on any version bump to discard stale coords.
+      if (db.objectStoreNames.contains(STORE_NAME)) {
+        db.deleteObjectStore(STORE_NAME);
       }
+      db.createObjectStore(STORE_NAME, {keyPath: "key"});
     };
 
     req.onsuccess = () => resolve(req.result);

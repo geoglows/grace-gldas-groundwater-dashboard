@@ -29,15 +29,16 @@
   <arcgis-map item-id="a69f14ea2e784e019f4a4b6835ffd376" zoom="2" center="0,20" class="map-view">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
-    <arcgis-locate slot="top-left" scale="5000"></arcgis-locate>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
       <arcgis-basemap-gallery></arcgis-basemap-gallery>
     </arcgis-expand>
     <!-- Top-right: Config/Info -->
     <arcgis-sketch slot="top-right" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
-    <arcgis-layer-list slot="top-right"></arcgis-layer-list>
+<!--    <arcgis-layer-list slot="top-right"></arcgis-layer-list>-->
     <!-- Bottom-left: Reference -->
-    <arcgis-legend slot="bottom-left"></arcgis-legend>
+    <arcgis-expand slot="bottom-left" title="Legend" expand-icon="legend">
+      <arcgis-legend></arcgis-legend>
+    </arcgis-expand>
     <arcgis-scale-bar slot="bottom-left" bar-style="line" unit="dual"></arcgis-scale-bar>
     <!-- Bottom-right: Primary tool -->
     <arcgis-time-slider slot="bottom-right" play-rate="1000" layout="auto"></arcgis-time-slider>
@@ -56,7 +57,7 @@
       <h3>Cell Borders</h3>
       <div class="setting-row">
         <label for="border-toggle">Show borders</label>
-        <input type="checkbox" id="border-toggle">
+        <input type="checkbox" id="border-toggle" checked>
       </div>
       <div class="setting-row">
         <label for="border-width">Border width</label>
@@ -118,9 +119,9 @@
       <h3>Color Scale Range</h3>
       <div class="setting-row">
         <label for="dynamic-scale-toggle">Dynamic scale (fit to data)</label>
-        <input type="checkbox" id="dynamic-scale-toggle">
+        <input type="checkbox" id="dynamic-scale-toggle" checked>
       </div>
-      <p class="setting-description">When enabled, the color scale adjusts to the min/max values in the selected region. When disabled, uses a fixed range of -30 to +30 cm.</p>
+      <p class="setting-description">When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -30 to +30 cm.</p>
     </div>
 
     <div class="modal-buttons">

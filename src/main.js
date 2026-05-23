@@ -13,7 +13,6 @@ import "@arcgis/map-components/components/arcgis-legend";
 import "@arcgis/map-components/components/arcgis-sketch";
 import "@arcgis/map-components/components/arcgis-time-slider";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
-import GroupLayer from "@arcgis/core/layers/GroupLayer.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
 import SpatialReference from "@arcgis/core/geometry/SpatialReference.js";
@@ -29,7 +28,7 @@ import Scatter from "plotly.js/lib/scatter";
 
 import {cellPolygonFromCenter} from "./cells.js";
 import {getOrFetchCoords} from "./db.js";
-import {createLinePlot, createUncertaintyBand, meanIgnoringNaN} from "./helpers.js";
+import {createLinePlot, createUncertaintyBand} from "./helpers.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
 
 Plotly.register([Scatter]);
@@ -90,8 +89,8 @@ const generateStops = () => {
   });
 };
 
-
-const zarrUrl = "https://d2grb3c773p1iz.cloudfront.net/groundwater/graceanomalies025.zarr3";
+// const zarrUrl = "https://d2grb3c773p1iz.cloudfront.net/groundwater/GRC025.zarr3";
+const zarrUrl = "http://localhost:5173/GRC_final.zarr3";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const arcgisLayerList = document.querySelector("arcgis-layer-list");
@@ -99,21 +98,24 @@ const sketchTool = document.querySelector("arcgis-sketch");
 const timeSlider = document.querySelector("arcgis-time-slider");
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
 const appInstructions = timeseriesPlotDiv.innerHTML
-  // Settings modal
-  const settingsModal = document.getElementById("settings-modal");
-  const borderToggle = document.getElementById("border-toggle");
-  const borderWidthSlider = document.getElementById("border-width");
-  const borderWidthValue = document.getElementById("border-width-value");
-  const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
+// Settings modal
+const settingsModal = document.getElementById("settings-modal");
+const borderToggle = document.getElementById("border-toggle");
+const borderWidthSlider = document.getElementById("border-width");
+const borderWidthValue = document.getElementById("border-width-value");
+const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
+// Sync initial state from the checkboxes (which render `checked`); otherwise the
+displayConfig.dynamicColorScale = dynamicScaleToggle.checked;
+displayConfig.showBorders = borderToggle.checked;
 
-// todo: start these fetches all async in the same bit
+const openArray = (name) => open.v3(new FetchStore(`${zarrUrl}/${name}`));
+
 const coordsPromise = getOrFetchCoords({zarrUrl});
-const lweStore = new FetchStore(zarrUrl + "/lwe_thickness");
-const lweNode = await open.v3(lweStore);
-const uncStore = new FetchStore(zarrUrl + "/uncertainty");
-const uncNode = await open.v3(uncStore);
-const timeStore = new FetchStore(zarrUrl + "/time");
-const timeNode = await open.v3(timeStore);
+const [
+  gwaNode, gwaUncNode, timeNode
+] = await Promise.all([
+  openArray("gw_lwe_thickness"), openArray("gw_uncertainty"), openArray("time")
+]);
 const timeIntegers = await get(timeNode, [null]);
 const timeDates = Array.from(timeIntegers.data).map((t) => {
   const baseDate = new Date(Date.UTC(2002, 3, 1)); // April 1, 2002
@@ -204,13 +206,10 @@ const main = async ({polygon, zoomPromise}) => {
   const yStop = lat.data.indexOf(filteredLats[filteredLats.length - 1]) + 1;
   const xStart = lon.data.indexOf(filteredLons[0]);
   const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
-  // Fetch values and uncertainties for all 3 variables (placeholder: using same data source for now)
-  let gwaValues = get(lweNode, [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}]);
-  let smaValues = get(lweNode, [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}]);
-  let twsaValues = get(lweNode, [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}]);
-  let gwaUncValues = get(uncNode, [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}]);
-  let smaUncValues = get(uncNode, [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}]);
-  let twsaUncValues = get(uncNode, [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}]);
+  // Fetch values and uncertainties, each parameter from its own dedicated array
+  const readWindow = [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}];
+  let gwaValues = get(gwaNode, readWindow);
+  let gwaUncValues = get(gwaUncNode, readWindow);
 
   // ---- Find the overlapping areas of the cells with the polygon ----
   intersectionOperator.accelerateGeometry(polygon);
@@ -219,22 +218,16 @@ const main = async ({polygon, zoomPromise}) => {
     for (const x of filteredLons) {
       const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
       const cellArea = geometryEngine.geodesicArea(cell);
-
       const intersectsGeom = intersectionOperator.execute(polygon, cell);
       const intersectArea = intersectsGeom ? geometryEngine.geodesicArea(intersectsGeom) : 0;
       const frac = intersectArea / cellArea;
-
-      intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom});
+      intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
     }
   }
 
   // ---- Resolve zarr reads and compute averages
   gwaValues = await gwaValues;
-  smaValues = await smaValues;
-  twsaValues = await twsaValues;
   gwaUncValues = await gwaUncValues;
-  smaUncValues = await smaUncValues;
-  twsaUncValues = await twsaUncValues;
 
   // Get indices of cells that pass the display threshold (frac >= 0.35)
   const displayThreshold = 0.35;
@@ -243,34 +236,46 @@ const main = async ({polygon, zoomPromise}) => {
     .filter(idx => idx !== -1);
 
   // Calculate max absolute value only for displayed cells
-  const findMaxAbsForValidCells = (data, shape, validIndices) => {
-    const [T, nLat, nLon] = shape;
-    const sliceSize = nLat * nLon;
+  const findMaxAbsForValidCells = (data, shape, stride, validIndices) => {
+    const [T, , nLon] = shape;
+    const [sT, sY, sX] = stride;
     let max = 0;
     for (let t = 0; t < T; t++) {
-      const timeOffset = t * sliceSize;
+      const tOffset = t * sT;
       for (const idx of validIndices) {
-        const val = data[timeOffset + idx];
-        if (!Number.isNaN(val) && Math.abs(val) > max) {
-          max = Math.abs(val);
+        // validIndices are row-major positions in the window: idx = y * nLon + x
+        const v = data[tOffset + Math.floor(idx / nLon) * sY + (idx % nLon) * sX];
+        if (!Number.isNaN(v) && Math.abs(v) > max) {
+          max = Math.abs(v);
         }
       }
     }
     return max;
   };
-  const maxAbs = Math.max(
-    findMaxAbsForValidCells(gwaValues.data, gwaValues.shape, validCellIndices),
-    findMaxAbsForValidCells(smaValues.data, smaValues.shape, validCellIndices),
-    findMaxAbsForValidCells(twsaValues.data, twsaValues.shape, validCellIndices)
-  );
+  const maxAbs = findMaxAbsForValidCells(gwaValues.data, gwaValues.shape, gwaValues.stride, validCellIndices);
   displayConfig.maxValue = Math.ceil(maxAbs) || 30; // round up, fallback to 30 if no valid cells
 
-  const gwaMeanTimeSeries = meanIgnoringNaN(gwaValues.data, gwaValues.shape, gwaValues.stride);
-  const smaMeanTimeSeries = meanIgnoringNaN(smaValues.data, smaValues.shape, smaValues.stride);
-  const twsaMeanTimeSeries = meanIgnoringNaN(twsaValues.data, twsaValues.shape, twsaValues.stride);
-  const gwaUncMeanTimeSeries = meanIgnoringNaN(gwaUncValues.data, gwaUncValues.shape, gwaUncValues.stride);
-  const smaUncMeanTimeSeries = meanIgnoringNaN(smaUncValues.data, smaUncValues.shape, smaUncValues.stride);
-  const twsaUncMeanTimeSeries = meanIgnoringNaN(twsaUncValues.data, twsaUncValues.shape, twsaUncValues.stride);
+  const weightedMeanTimeSeries = (data, shape, stride, cells, indices) => {
+    const [T, , nLon] = shape;
+    const [sT, sY, sX] = stride;
+    const result = new Float64Array(T);
+    for (let t = 0; t < T; t++) {
+      const tOffset = t * sT;
+      let weightedSum = 0;
+      let weightTotal = 0;
+      for (const idx of indices) {
+        const v = data[tOffset + Math.floor(idx / nLon) * sY + (idx % nLon) * sX];
+        if (Number.isNaN(v)) continue;
+        const w = cells[idx].overlapArea;
+        weightedSum += v * w;
+        weightTotal += w;
+      }
+      result[t] = weightTotal > 0 ? weightedSum / weightTotal : NaN;
+    }
+    return result;
+  };
+  const gwaMeanTimeSeries = weightedMeanTimeSeries(gwaValues.data, gwaValues.shape, gwaValues.stride, intersectingCells, validCellIndices);
+  const gwaUncMeanTimeSeries = weightedMeanTimeSeries(gwaUncValues.data, gwaUncValues.shape, gwaUncValues.stride, intersectingCells, validCellIndices);
 
   // Generate the timeseries plot
   timeseriesPlotDiv.innerHTML = "";
@@ -280,18 +285,12 @@ const main = async ({polygon, zoomPromise}) => {
       // GWA uncertainty band and line
       createUncertaintyBand({x: timeDates, yArray: gwaMeanTimeSeries, uncertaintyArray: gwaUncMeanTimeSeries, color: "rgba(28,110,236,0.25)", name: "GWA"}),
       createLinePlot({x: timeDates, y: gwaMeanTimeSeries, color: "#1c6eec", name: "GWA"}),
-      // SMA uncertainty band and line
-      createUncertaintyBand({x: timeDates, yArray: smaMeanTimeSeries, uncertaintyArray: smaUncMeanTimeSeries, color: "rgba(215,48,39,0.25)", name: "SMA"}),
-      createLinePlot({x: timeDates, y: smaMeanTimeSeries, color: "#d73027", name: "SMA"}),
-      // TWSA uncertainty band and line
-      createUncertaintyBand({x: timeDates, yArray: twsaMeanTimeSeries, uncertaintyArray: twsaUncMeanTimeSeries, color: "rgba(140,81,10,0.25)", name: "TWSA"}),
-      createLinePlot({x: timeDates, y: twsaMeanTimeSeries, color: "#8c510a", name: "TWSA"}),
     ],
     {
-      title: {text: "Mean Anomaly Time Series with Uncertainty", font: {size: 14, color: "#333"}},
+      title: {text: "Groundwater Anomaly Time Series and Uncertainty", font: {size: 14, color: "#333"}},
       xaxis: {title: {text: "Time", font: {size: 12, color: "#333"}}, automargin: true},
       yaxis: {title: {text: "Liquid Water Equivalent (cm)", font: {size: 12, color: "#333"}}, automargin: true},
-      legend: {orientation: "h", y: -0.2},
+      legend: false,
     },
     {
       responsive: true,
@@ -306,7 +305,7 @@ const main = async ({polygon, zoomPromise}) => {
         {
           name: "Download CSV",
           icon: Plotly.Icons.disk,
-          click: function(gd) {
+          click: function (gd) {
             // Separate line traces from uncertainty band traces
             const lineTraces = gd.data.filter(t => t.mode === "lines");
             const bandTraces = gd.data.filter(t => t.fill === "toself");
@@ -367,9 +366,7 @@ const main = async ({polygon, zoomPromise}) => {
           lon,
           lat,
           frac,
-          gwaValue: 0,
-          smaValue: 0,
-          twsaValue: 0
+          gwaValue: 0
         }
       });
     })
@@ -381,9 +378,7 @@ const main = async ({polygon, zoomPromise}) => {
     {name: "lon", type: "double"},
     {name: "lat", type: "double"},
     {name: "frac", type: "double"},
-    {name: "gwaValue", type: "double"},
-    {name: "smaValue", type: "double"},
-    {name: "twsaValue", type: "double"}
+    {name: "gwaValue", type: "double"}
   ];
 
   // Create renderer for a given field using current display config
@@ -408,9 +403,8 @@ const main = async ({polygon, zoomPromise}) => {
     };
   };
 
-  // 3 FeatureLayers sharing the same source, each with renderer for different field
   const gwaLayer = new FeatureLayer({
-    title: "Groundwater Storage",
+    title: "GRACE Anomalies",
     source: cellSource,
     objectIdField: "oid",
     fields: cellFields,
@@ -420,41 +414,11 @@ const main = async ({polygon, zoomPromise}) => {
     visible: true
   });
 
-  const smaLayer = new FeatureLayer({
-    title: "Soil Moisture",
-    source: cellSource,
-    objectIdField: "oid",
-    fields: cellFields,
-    geometryType: "polygon",
-    spatialReference: SpatialReference.WGS84,
-    renderer: createRenderer("smaValue"),
-    visible: false
-  });
-
-  const twsaLayer = new FeatureLayer({
-    title: "Total Water Storage",
-    source: cellSource,
-    objectIdField: "oid",
-    fields: cellFields,
-    geometryType: "polygon",
-    spatialReference: SpatialReference.WGS84,
-    renderer: createRenderer("twsaValue"),
-    visible: false
-  });
-
-  // Group layer with exclusive visibility (only one visible at a time)
-  const anomalyCellsGroup = new GroupLayer({
-    title: "GRACE Anomalies",
-    visibilityMode: "exclusive",
-    layers: [gwaLayer, smaLayer, twsaLayer],
-    visible: true
-  });
-
-  // Remove existing group if present and add new one
-  const possiblyExistingGroup = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-  if (possiblyExistingGroup) arcgisMap.map.layers.remove(possiblyExistingGroup);
+  // Remove existing anomaly layer if present and add new one
+  const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
+  if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
   await zoomPromise;
-  arcgisMap.map.layers.add(anomalyCellsGroup, 0);
+  arcgisMap.map.layers.add(gwaLayer, 0);
 
   // ---- precompute lookup from feature idx -> oid ----
   const oids = cellSource.map(g => g.attributes.oid);
@@ -469,26 +433,19 @@ const main = async ({polygon, zoomPromise}) => {
       const nLat = gwaValues.shape[1];
       const base = timeStep * nLat * nLon;
 
-      // Build update array with all 3 values for each cell
+      // Build update array with the groundwater value for each cell
       const updateFeatures = new Array(cellSource.length);
       for (let i = 0; i < cellSource.length; i++) {
         const idx = idxs[i];
         updateFeatures[i] = new Graphic({
           attributes: {
             oid: oids[i],
-            gwaValue: gwaValues.data[base + idx],
-            smaValue: smaValues.data[base + idx],
-            twsaValue: twsaValues.data[base + idx]
+            gwaValue: gwaValues.data[base + idx]
           }
         });
       }
 
-      // Update all layers (they share the same data structure)
-      await Promise.all([
-        gwaLayer.applyEdits({updateFeatures}),
-        smaLayer.applyEdits({updateFeatures}),
-        twsaLayer.applyEdits({updateFeatures})
-      ]);
+      await gwaLayer.applyEdits({updateFeatures});
 
       Plotly
         .relayout(
@@ -553,6 +510,8 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   boundaryLayer.load().then(() => arcgisMap.view.goTo(boundaryLayer.fullExtent))
 
   sketchTool.availableCreateTools = ["polygon"];
+  sketchTool.hideSelectionToolsRectangleSelection = true;
+  sketchTool.hideSelectionToolsLassoSelection = true;
   sketchTool.layer.title = "User drawn polygons";
   sketchTool.addEventListener("arcgisCreate", (e) => {
     if (e.detail.state === "start") {
@@ -561,41 +520,6 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
     if (e.detail.state === "complete") {
       const polygon = e.detail.graphic.geometry;
       analyzeDrawnPolygon({polygon});
-    }
-  })
-
-  arcgisLayerList.listItemCreatedFunction = (event) => {
-    const item = event.item;
-    if (item.layer.title === "Aquifer Boundaries") {
-      item.actionsSections = [[
-        {
-          title: "Zoom to Full Extent",
-          id: "full-extent-aquifers",
-          icon: "zoom-out-fixed"
-        }
-      ]];
-    } else if (item.layer.title === "GRACE Anomalies") {
-      item.open = true;
-      item.actionsSections = [[
-        {
-          title: "Zoom to Full Extent",
-          id: "full-extent-anomaly-cells",
-          icon: "zoom-out-fixed"
-        },
-      ]];
-    }
-  }
-
-  arcgisLayerList.addEventListener("arcgisTriggerAction", (event) => {
-    if (event.detail.action.id === "full-extent-aquifers") {
-      arcgisMap.view.goTo(boundaryLayer.fullExtent);
-    } else if (event.detail.action.id === "full-extent-anomaly-cells") {
-      const anomalyCellsGroup = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-      if (anomalyCellsGroup?.layers?.length) {
-        arcgisMap.view.goTo(anomalyCellsGroup.layers.getItemAt(0).fullExtent);
-      }
-    } else if (event.detail.action.id === "reset-selections") {
-      resetLayers();
     }
   })
 
@@ -630,37 +554,33 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
     }
   });
 
-  // Function to update all anomaly cell layer renderers
+  // Function to update the anomaly layer renderer
   const updateAnomalyCellRenderers = () => {
-    const anomalyCellsGroup = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-    if (!anomalyCellsGroup?.layers) return;
+    const anomalyLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
+    const field = anomalyLayer?.renderer?.visualVariables?.[0]?.field;
+    if (!field) return;
 
-    anomalyCellsGroup.layers.forEach((layer) => {
-      const field = layer.renderer?.visualVariables?.[0]?.field;
-      if (!field) return;
-
-      layer.renderer = {
-        type: "simple",
-        symbol: {
-          type: "simple-fill",
-          outline: displayConfig.showBorders
-            ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
-            : {color: [0, 0, 0, 0], width: 0}
-        },
+    anomalyLayer.renderer = {
+      type: "simple",
+      symbol: {
+        type: "simple-fill",
+        outline: displayConfig.showBorders
+          ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
+          : {color: [0, 0, 0, 0], width: 0}
+      },
+      legendOptions: {
+        showLegend: false  // hide the polygon symbol in legend
+      },
+      visualVariables: [{
+        type: "color",
+        field,
+        stops: generateStops(),
         legendOptions: {
-          showLegend: false  // hide the polygon symbol in legend
-        },
-        visualVariables: [{
-          type: "color",
-          field,
-          stops: generateStops(),
-          legendOptions: {
-            title: "Liquid Water Equivalent (cm)",
-            showLegend: true  // show the color ramp
-          }
-        }]
-      };
-    });
+          title: "Liquid Water Equivalent (cm)",
+          showLegend: true  // show the color ramp
+        }
+      }]
+    };
   };
 
   // Border toggle
@@ -808,7 +728,7 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
           outline: {color: [0, 0, 0, 1], width: 2}
         }
       }));
-      analyzeDrawnPolygon({polygon});
+      await analyzeDrawnPolygon({polygon});
     } catch (err) {
       showUploadError(err.message);
       uploadSubmit.disabled = false;
