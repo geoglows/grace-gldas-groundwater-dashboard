@@ -26,7 +26,7 @@
   </div>
 </div>
 <div class="body">
-  <arcgis-map item-id="a69f14ea2e784e019f4a4b6835ffd376" zoom="2" center="0,20" class="map-view">
+  <arcgis-map id="aquifer-map" item-id="a69f14ea2e784e019f4a4b6835ffd376" zoom="2" center="0,20" class="map-view">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
@@ -39,10 +39,10 @@
     <arcgis-expand slot="bottom-left" title="Legend" expand-icon="legend">
       <arcgis-legend></arcgis-legend>
     </arcgis-expand>
-    <arcgis-scale-bar slot="bottom-left" bar-style="line" unit="dual"></arcgis-scale-bar>
-    <!-- Bottom-right: Primary tool -->
-    <arcgis-time-slider slot="bottom-right" play-rate="1000" layout="auto"></arcgis-time-slider>
+    <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
   </arcgis-map>
+  <!-- Full-width time slider between the map and the chart, bound to the map via reference-element -->
+  <arcgis-time-slider class="time-slider-bar" reference-element="aquifer-map" play-rate="1000" layout="wide"></arcgis-time-slider>
   <div id="timeseries-plot" class="chart-container">
     <div class="centered-message">Select an aquifer, draw a polygon, or upload a boundary geojson to get started.</div>
   </div>

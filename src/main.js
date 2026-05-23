@@ -287,10 +287,11 @@ const main = async ({polygon, zoomPromise}) => {
       createLinePlot({x: timeDates, y: gwaMeanTimeSeries, color: "#1c6eec", name: "GWA"}),
     ],
     {
-      title: {text: "Groundwater Anomaly Time Series and Uncertainty", font: {size: 14, color: "#333"}},
+      title: {text: "Groundwater Anomaly Time Series and Uncertainty", font: {size: 14, color: "#333"}, y: 0.97, yanchor: "top"},
       xaxis: {title: {text: "Time", font: {size: 12, color: "#333"}}, automargin: true},
       yaxis: {title: {text: "Liquid Water Equivalent (cm)", font: {size: 12, color: "#333"}}, automargin: true},
-      legend: false,
+      showlegend: false,
+      dragmode: false,  // disable click-and-drag zoom/pan on the plot area
     },
     {
       responsive: true,
