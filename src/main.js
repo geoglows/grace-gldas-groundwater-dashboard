@@ -9,7 +9,6 @@ import "@arcgis/map-components/components/arcgis-locate";
 import "@arcgis/map-components/components/arcgis-scale-bar";
 import "@arcgis/map-components/components/arcgis-expand";
 import "@arcgis/map-components/components/arcgis-basemap-gallery";
-import "@arcgis/map-components/components/arcgis-legend";
 import "@arcgis/map-components/components/arcgis-sketch";
 import "@arcgis/map-components/components/arcgis-time-slider";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
@@ -21,15 +20,18 @@ import * as shapePreservingProjectOperator from "@arcgis/core/geometry/operators
 import * as geometryEngine from "@arcgis/core/geometry/geometryEngine.js";
 import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 
-import {FetchStore, get, open} from "zarrita";
+import {get} from "zarrita";
 
 import Plotly from "plotly.js/lib/core";
 import Scatter from "plotly.js/lib/scatter";
 
 import {cellPolygonFromCenter} from "./cells.js";
 import {getOrFetchCoords} from "./db.js";
+import {computeFrameStats, loadGlobalFrames} from "./globalData.js";
+import {createGlobalRenderer} from "./globalLayer.js";
 import {createLinePlot, createUncertaintyBand} from "./helpers.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
+import {openZarrArray} from "./zarrStore.js";
 
 Plotly.register([Scatter]);
 
@@ -40,7 +42,8 @@ const displayConfig = {
   colorPalette: "default",
   dynamicColorScale: false,  // toggle for dynamic vs fixed color scale
   maxValue: 30,              // dynamic max (calculated from data when enabled)
-  fixedMaxValue: 30          // fixed max (always 30)
+  fixedMaxValue: 30,         // fixed max (always 30)
+  opacity: 1                 // anomaly layer opacity (regional feature layer + global raster)
 };
 
 // Color palettes - use normalized positions (-1 to 1) that get scaled to actual data range
@@ -94,6 +97,9 @@ const generateStops = () => {
 // The CloudFront distribution must return CORS headers (Access-Control-Allow-
 // Origin) for this cross-origin fetch to work in the browser.
 const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance.zarr";
+// Companion copy of GWSa downsampled (~4°x4° tiles) for the whole-world
+// animation: the full dataset is only a few MB there instead of ~30 MB.
+const visZarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance-vis.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const arcgisLayerList = document.querySelector("arcgis-layer-list");
@@ -111,7 +117,7 @@ const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 displayConfig.dynamicColorScale = dynamicScaleToggle.checked;
 displayConfig.showBorders = borderToggle.checked;
 
-const openArray = (name) => open.v3(new FetchStore(`${zarrUrl}/${name}`));
+const openArray = (name) => openZarrArray(zarrUrl, name);
 
 const coordsPromise = getOrFetchCoords({zarrUrl});
 const [gwsaNode, gwsaUncNode, timeNode] = await Promise.all([openArray("GWSa"), openArray("GWSa_unc"), openArray("time")]);
@@ -191,7 +197,249 @@ const analyzeDrawnPolygon = async ({polygon}) => {
   await main({polygon, zoomPromise});
 }
 
+// ---- Whole-world animated view ----
+// Every spatial chunk of the zarr holds the full time series, so a global
+// frame costs the same as all frames: the whole downsampled vis copy (a few
+// MB compressed; ocean chunks are never stored) is fetched once, cached in
+// IndexedDB, and rendered as a Mercator-warped raster (globalLayer.js)
+// instead of thousands of per-frame polygon edits. No time series chart is
+// shown in this mode.
+// Captured once here: view.ui.add() later moves these nodes into the
+// arcgis-map shadow DOM where document.getElementById can't see them.
+const globalProgressDiv = document.getElementById("global-progress");
+const globalProgressLabel = document.getElementById("global-progress-label");
+const globalProgressFill = document.getElementById("global-progress-fill");
+// Shared color-ramp legend, used by both the regional and global views.
+const mapLegendDiv = document.getElementById("map-legend");
+const mapLegendBar = document.getElementById("map-legend-bar");
+const mapLegendMin = document.getElementById("map-legend-min");
+const mapLegendMax = document.getElementById("map-legend-max");
+
+const globalView = {
+  active: false,
+  runSeq: 0,       // bumped on every enter/exit so stale async runs abandon
+  renderer: null,
+  dataPromise: null,
+  data: null,      // {frames, nT, nLat, nLon} from the vis copy
+  stats: null      // {validTimeIndices, suggestedMax}
+};
+
+// The regional (aquifer scale) and global buttons form a mutually-exclusive
+// group: whichever mode is active shows its button pressed. exitGlobalView()
+// and analyzeGlobalView() are the single choke points for the two modes, so the
+// indicator is flipped from there.
+const regionalViewButton = document.querySelector("#refresh-layers");
+const globalViewButton = document.querySelector("#global-view-button");
+const setActiveViewButton = (mode) => {
+  const regionalActive = mode === "regional";
+  regionalViewButton.classList.toggle("active", regionalActive);
+  regionalViewButton.setAttribute("aria-pressed", String(regionalActive));
+  globalViewButton.classList.toggle("active", !regionalActive);
+  globalViewButton.setAttribute("aria-pressed", String(!regionalActive));
+};
+setActiveViewButton("regional"); // regional/aquifer scale is the initial view
+
+// Route time-slider changes to whichever view is active (regional applyEdits
+// or global raster). A single watcher instead of one per analysis run.
+let timeStepHandler = null;
+// Bumped whenever any analysis (regional or global) starts or the app resets,
+// so an in-flight regional run abandons before mutating shared UI state.
+let analysisRunSeq = 0;
+let sliderWatcherInstalled = false;
+const ensureSliderWatcher = () => {
+  if (sliderWatcherInstalled) return;
+  sliderWatcherInstalled = true;
+  reactiveUtils.watch(
+    () => timeSlider.widget.timeExtent,
+    (te) => {
+      const current = te?.start;
+      if (!current) return;
+      const idx = timeDates.findIndex((d) => d.getTime() === current.getTime());
+      if (idx >= 0) timeStepHandler?.(idx);
+    }
+  );
+};
+
+const configureTimeSlider = (dates) => {
+  timeSlider.mode = "instant";
+  timeSlider.fullTimeExtent = {start: dates[0], end: dates[dates.length - 1]};
+  timeSlider.stops = {dates};
+  timeSlider.timeExtent = {start: dates[0], end: dates[0]};
+  timeSlider.labelsVisible = true;
+};
+
+const updateGlobalProgress = (fraction) => {
+  globalProgressLabel.textContent = `Loading global data… ${Math.round(fraction * 100)}%`;
+  globalProgressFill.style.width = `${Math.round(fraction * 100)}%`;
+};
+
+// Both views share this small color-ramp legend, built from the current stops.
+// (MediaLayer rasters never appeared in the ArcGIS legend widget, and that
+// widget has been removed, so this is the only legend in the app.)
+const updateMapLegend = () => {
+  const stops = generateStops();
+  const min = stops[0].value;
+  const max = stops[stops.length - 1].value;
+  const gradient = stops.map((s) => `${s.color} ${(((s.value - min) / (max - min)) * 100).toFixed(1)}%`).join(", ");
+  mapLegendBar.style.background = `linear-gradient(to right, ${gradient})`;
+  mapLegendMin.textContent = `${min} cm`;
+  mapLegendMax.textContent = `${max} cm`;
+};
+
+const setGlobalGrid = () => {
+  globalView.renderer.setGrid({...globalView.data, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
+};
+
+// While chunks stream in, preview the most recent month that already has data
+// at one of a few landmark land cells, so the world visibly fills in.
+const pickPreviewTimeStep = ({frames, nT, nLat, nLon}) => {
+  const spots = [[40.5, -99.5], [-4.5, -60.5], [25.5, 78.5], [48.5, 10.5]];
+  const cells = spots
+    .map(([la, lo]) => {
+      const row = Math.round((la - globalView.lat0) / globalView.cellSize);
+      const col = Math.round((lo - globalView.lon0) / globalView.cellSize);
+      return row >= 0 && row < nLat && col >= 0 && col < nLon ? row * nLon + col : -1;
+    })
+    .filter((i) => i >= 0);
+  const frameSize = nLat * nLon;
+  for (let t = nT - 1; t >= 0; t--) {
+    const base = t * frameSize;
+    if (cells.some((c) => frames[base + c] === frames[base + c])) return t;
+  }
+  return nT - 1;
+};
+
+const ensureGlobalData = () => {
+  if (!globalView.dataPromise) {
+    globalView.dataPromise = (async () => {
+      const {lat, lon} = await getOrFetchCoords({zarrUrl: visZarrUrl});
+      globalView.cellSize = lat.data[1] - lat.data[0];
+      globalView.lat0 = lat.data[0];
+      globalView.lon0 = lon.data[0];
+      globalView.latEdgeMin = lat.data[0] - globalView.cellSize / 2;
+
+      let previewReady = false;
+      let lastPreviewAt = 0;
+      // dedicated node: the global loader wants opaque CORS errors confirmed
+      // twice before accepting a chunk as missing (it caches what it reads)
+      const globalGwsaNode = await openZarrArray(visZarrUrl, "GWSa", {confirmOpaqueErrors: true});
+      const data = await loadGlobalFrames({
+        gwsaNode: globalGwsaNode,
+        zarrUrl: visZarrUrl,
+        onProgress: (fraction, partial) => {
+          if (!globalView.active) return;
+          updateGlobalProgress(fraction);
+          if (!partial || fraction >= 1) return;
+          const now = performance.now();
+          if (now - lastPreviewAt < 500) return;
+          lastPreviewAt = now;
+          if (!previewReady) {
+            globalView.renderer.setStops(generateStops());
+            globalView.renderer.setGrid({...partial, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
+            previewReady = true;
+          }
+          globalView.renderer.drawFrame(pickPreviewTimeStep(partial));
+        }
+      });
+      globalView.stats = computeFrameStats(data);
+      globalView.data = data;
+      console.info(`Global view ready (${data.fromCache ? "from cache" : "from network"}): ${globalView.stats.validTimeIndices.length}/${data.nT} months with data, dynamic color scale ±${globalView.stats.suggestedMax} cm`);
+    })().catch((err) => {
+      globalView.dataPromise = null; // allow retry after a failure
+      throw err;
+    });
+  }
+  return globalView.dataPromise;
+};
+
+const analyzeGlobalView = async () => {
+  const runId = ++globalView.runSeq;
+  analysisRunSeq++; // abandon any in-flight regional analysis
+  globalView.active = true;
+  setActiveViewButton("global");
+
+  // ---- clear any regional analysis state
+  sketchTool.layer.removeAll();
+  // The whole-world raster covers the map; the aquifer outlines would only
+  // clutter it, so hide them here (exitGlobalView restores them).
+  boundaryLayer.visible = false;
+  boundaryLayer.definitionExpression = "1=1";
+  const possiblyExistingLayer = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
+  if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
+  timeSlider.widget?.stop();
+  timeseriesPlotDiv.innerHTML = "";
+  timeseriesPlotDiv.classList.add("hidden");
+
+  const zoomPromise = arcgisMap.view.goTo({center: [0, 20], zoom: 4}).catch(() => {});
+
+  if (!globalView.renderer) globalView.renderer = createGlobalRenderer({title: "GRACE Anomalies (Global)"});
+  if (!arcgisMap.map.layers.includes(globalView.renderer.layer)) {
+    arcgisMap.map.layers.add(globalView.renderer.layer, 0);
+  }
+
+  if (!globalView.data) {
+    globalProgressDiv.classList.remove("hidden");
+    updateGlobalProgress(0);
+  }
+  try {
+    await ensureGlobalData();
+  } catch (err) {
+    console.error("Failed to load the global dataset", err);
+    if (globalView.runSeq === runId && globalView.active) {
+      globalProgressLabel.textContent = "Failed to load global data. Press the globe to retry.";
+      globalProgressFill.style.width = "0%";
+    }
+    return;
+  }
+  if (globalView.runSeq !== runId || !globalView.active) return;
+  globalProgressDiv.classList.add("hidden");
+
+  // Fit the color scale to the 95th percentile of |values| across the whole
+  // dataset; a plain max would let a few extreme cells wash out the ramp.
+  displayConfig.maxValue = globalView.stats.suggestedMax;
+  setGlobalGrid();
+  globalView.renderer.setStops(generateStops());
+  globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
+  globalView.renderer.layer.opacity = displayConfig.opacity;
+  updateMapLegend();
+  mapLegendDiv.classList.remove("hidden");
+
+  const validDates = globalView.stats.validTimeIndices.map((t) => timeDates[t]);
+  timeStepHandler = (idx) => globalView.renderer.drawFrame(idx);
+  ensureSliderWatcher();
+  configureTimeSlider(validDates.length ? validDates : timeDates);
+  timeSlider.playRate = 250;
+  timeSlider.loop = true; // loop when the user presses play
+  globalView.renderer.drawFrame(globalView.stats.validTimeIndices[0] ?? 0);
+
+  await zoomPromise;
+  // Leave the animation paused on the first frame; the user starts it with the
+  // time slider's play button when ready.
+};
+
+const exitGlobalView = () => {
+  globalView.runSeq++;
+  globalView.active = false;
+  setActiveViewButton("regional");
+  timeStepHandler = null;
+  timeSlider.widget?.stop();
+  timeSlider.playRate = 1000;
+  timeSlider.loop = false;
+  if (globalView.renderer) {
+    globalView.renderer.clear();
+    arcgisMap.map.layers.remove(globalView.renderer.layer);
+  }
+  // Undo the global-view state changes; callers (main/resetLayers) re-show the
+  // shared legend when a regional layer takes over.
+  boundaryLayer.visible = true;
+  globalProgressDiv.classList.add("hidden");
+  mapLegendDiv.classList.add("hidden");
+  timeseriesPlotDiv.classList.remove("hidden");
+};
+
 const main = async ({polygon, zoomPromise}) => {
+  exitGlobalView();
+  const runId = ++analysisRunSeq;
   const {lat, lon} = await coordsPromise;
   await arcgisMap.map.when();
   await arcgisMap.view.when();
@@ -227,6 +475,7 @@ const main = async ({polygon, zoomPromise}) => {
   // ---- Resolve zarr reads and compute averages
   gwsaValues = await gwsaValues;
   gwsaUncValues = await gwsaUncValues;
+  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
 
   // Get indices of cells that pass the display threshold (frac >= 0.35)
   const displayThreshold = 0.35;
@@ -418,6 +667,7 @@ const main = async ({polygon, zoomPromise}) => {
     geometryType: "polygon",
     spatialReference: SpatialReference.WGS84,
     renderer: createRenderer("gwsaValue"),
+    opacity: displayConfig.opacity,
     visible: true
   });
 
@@ -425,7 +675,10 @@ const main = async ({polygon, zoomPromise}) => {
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
   await zoomPromise;
+  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
   arcgisMap.map.layers.add(gwsaLayer, 0);
+  updateMapLegend();
+  mapLegendDiv.classList.remove("hidden");
 
   // ---- precompute lookup from feature idx -> oid ----
   const oids = cellSource.map(g => g.attributes.oid);
@@ -473,48 +726,60 @@ const main = async ({polygon, zoomPromise}) => {
   };
 
   // update the timeSlider web component — stops only on dates that have data
-  timeSlider.mode = "instant";
-  timeSlider.fullTimeExtent = {
-    start: sliderDates[0],
-    end: sliderDates[sliderDates.length - 1]
-  };
-  timeSlider.stops = {dates: sliderDates};
-  timeSlider.timeExtent = {
-    start: sliderDates[0],
-    end: sliderDates[0]
-  };
-  timeSlider.labelsVisible = true;
-
-  reactiveUtils.watch(
-    () => timeSlider.widget.timeExtent,
-    (te) => {
-      const current = te?.start;
-      if (!current) return;
-      const idx = timeDates.findIndex((d) => d.getTime() === current.getTime());
-      if (idx >= 0) updateMapToTimeStep(idx);
-    }
-  );
+  timeStepHandler = updateMapToTimeStep;
+  ensureSliderWatcher();
+  configureTimeSlider(sliderDates);
 
   // initial draw
   updateMapToTimeStep(firstValidStep);
 }
 
 const resetLayers = () => {
+  exitGlobalView();
+  analysisRunSeq++; // abandon any in-flight regional analysis
   sketchTool.layer.removeAll();
   boundaryLayer.visible = true;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   arcgisMap.view.goTo(boundaryLayer.fullExtent);
-  timeSlider.widget.stop();
+  timeSlider.widget?.stop();
   timeseriesPlotDiv.innerHTML = appInstructions;
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
 }
 
+// Build a custom set of zoom levels (LODs) at half-step increments. The default
+// Web Mercator scheme halves the scale every level, so the jump from the most
+// zoomed-out level to one step in is a jarring 2x. These LODs change scale by a
+// factor of √2 per level (half a traditional zoom level) for gentler steps.
+// Note: because each level is now a half-step, a given scale sits at twice the
+// LOD number it used to (e.g. old zoom 2 → new zoom 4).
+const BASE_SCALE = 591657527.591555;        // Web Mercator level-0 scale
+const BASE_RESOLUTION = 156543.03392800014; // ...and its resolution (m/px)
+const HALF_STEP = Math.SQRT2;               // per-level scale/resolution factor
+const halfZoomLODs = Array.from({length: 47}, (_, i) => ({
+  level: i,
+  scale: BASE_SCALE / Math.pow(HALF_STEP, i),
+  resolution: BASE_RESOLUTION / Math.pow(HALF_STEP, i),
+}));
+
 arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   await arcgisMap.map.when();
   await arcgisMap.view.when()
+  arcgisMap.view.constraints = {lods: halfZoomLODs, snapToZoom: true};
   arcgisMap.map.add(boundaryLayer);
-  boundaryLayer.load().then(() => arcgisMap.view.goTo(boundaryLayer.fullExtent))
+  // Preload the boundaries for later regional use; the camera is set by whichever
+  // view we start in (global by default), so don't fit to the boundary extent here.
+  boundaryLayer.load();
+
+  // dock the overlays inside the map UI: the load-progress bar top-right, and
+  // the shared color-ramp legend bottom-left (where the ArcGIS legend widget
+  // used to live).
+  arcgisMap.view.ui.add(globalProgressDiv, "top-right");
+  arcgisMap.view.ui.add(mapLegendDiv, "bottom-left");
+
+  document
+    .querySelector("#global-view-button")
+    .addEventListener("click", () => analyzeGlobalView());
 
   sketchTool.availableCreateTools = ["polygon"];
   sketchTool.hideSelectionToolsRectangleSelection = true;
@@ -561,12 +826,23 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
     }
   });
 
-  // Function to update the anomaly layer renderer
-  const updateAnomalyCellRenderers = () => {
+  // Restyle whichever anomaly layer is active (global raster or regional cells)
+  // from the current display config, and refresh the shared legend.
+  const updateAnomalyLayerAppearance = () => {
+    // Global raster: restyle from the same stops, opacity, and cell boundaries
+    if (globalView.active && globalView.data) {
+      globalView.renderer.layer.opacity = displayConfig.opacity;
+      globalView.renderer.setStops(generateStops());
+      globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
+      globalView.renderer.redraw();
+      updateMapLegend();
+      return; // no regional feature layer while the global view is active
+    }
     const anomalyLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
     const field = anomalyLayer?.renderer?.visualVariables?.[0]?.field;
     if (!field) return;
 
+    anomalyLayer.opacity = displayConfig.opacity;
     anomalyLayer.renderer = {
       type: "simple",
       symbol: {
@@ -575,46 +851,50 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
           ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
       },
-      legendOptions: {
-        showLegend: false  // hide the polygon symbol in legend
-      },
       visualVariables: [{
         type: "color",
         field,
-        stops: generateStops(),
-        legendOptions: {
-          title: "Liquid Water Equivalent (cm)",
-          showLegend: true  // show the color ramp
-        }
+        stops: generateStops()
       }]
     };
+    updateMapLegend();
   };
 
-  // Border toggle
-  borderToggle.addEventListener("change", (e) => {
-    displayConfig.showBorders = e.target.checked;
-    updateAnomalyCellRenderers();
+  // Layer opacity slider
+  const opacitySlider = document.getElementById("opacity-slider");
+  const opacityValue = document.getElementById("opacity-value");
+  displayConfig.opacity = parseFloat(opacitySlider.value);
+  opacitySlider.addEventListener("input", (e) => {
+    displayConfig.opacity = parseFloat(e.target.value);
+    opacityValue.textContent = `${Math.round(displayConfig.opacity * 100)}%`;
+    updateAnomalyLayerAppearance();
   });
 
-  // Border width slider
+  // Cell boundary toggle
+  borderToggle.addEventListener("change", (e) => {
+    displayConfig.showBorders = e.target.checked;
+    updateAnomalyLayerAppearance();
+  });
+
+  // Cell boundary width slider
   borderWidthSlider.addEventListener("input", (e) => {
     displayConfig.borderWidth = parseFloat(e.target.value);
     borderWidthValue.textContent = `${displayConfig.borderWidth}px`;
-    updateAnomalyCellRenderers();
+    updateAnomalyLayerAppearance();
   });
 
   // Color palette radio buttons
   document.querySelectorAll('input[name="color-palette"]').forEach((radio) => {
     radio.addEventListener("change", (e) => {
       displayConfig.colorPalette = e.target.value;
-      updateAnomalyCellRenderers();
+      updateAnomalyLayerAppearance();
     });
   });
 
   // Dynamic color scale toggle
   dynamicScaleToggle.addEventListener("change", (e) => {
     displayConfig.dynamicColorScale = e.target.checked;
-    updateAnomalyCellRenderers();
+    updateAnomalyLayerAppearance();
   });
 
   // ---- Upload modal ----
@@ -742,4 +1022,22 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
       uploadSubmit.textContent = "Analyze";
     }
   });
+
+  // deep links: ?aquifer=<id> opens an aquifer analysis directly; otherwise the
+  // app starts on the whole-world view (the former ?global default).
+  const searchParams = new URLSearchParams(window.location.search);
+  if (searchParams.has("aquifer")) {
+    const aquiferId = parseInt(searchParams.get("aquifer"), 10);
+    if (Number.isFinite(aquiferId)) {
+      document.getElementById("info-modal").classList.add("hidden");
+      analyzeGlobalAquifer({aquiferId}).catch((err) => {
+        // unknown id: put the boundaries back instead of leaving them all
+        // filtered out by the unmatched definitionExpression
+        console.error(`Could not analyze aquifer ${aquiferId}`, err);
+        resetLayers();
+      });
+    }
+  } else {
+    analyzeGlobalView();
+  }
 });

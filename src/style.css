@@ -35,12 +35,30 @@ body {
 
 .nav-bar .icon-button {
     background: rgba(255, 255, 255, 0.45);
-    border: none;
+    border: 2px solid transparent;
     cursor: pointer;
     padding: 4px;
     display: flex;
     align-items: center;
     border-radius: 50%;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.nav-bar .icon-button:hover {
+    background: rgba(255, 255, 255, 0.65);
+}
+
+/* Regional vs. global buttons are a mutually-exclusive group: the active mode's
+   button appears pressed with a darker fill, an inset shadow, and a ring. */
+.nav-bar .icon-button.active {
+    background: rgba(0, 0, 0, 0.35);
+    border-color: rgba(255, 255, 255, 0.9);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+    color: #ffffff;
+}
+
+.nav-bar .icon-button.active calcite-icon {
+    color: #ffffff;
 }
 
 .body {
@@ -67,6 +85,14 @@ arcgis-map {
 .chart-container {
     flex: 0 0 32%;
     width: 100%;
+}
+
+/* Global view mode: no chart, the map takes the extra space.
+   (The global progress/legend overlays style themselves with scoped <style>
+   blocks in index.html because view.ui.add() moves them into the arcgis-map
+   shadow DOM, out of reach of this stylesheet.) */
+.chart-container.hidden {
+    display: none;
 }
 
 .centered-message {

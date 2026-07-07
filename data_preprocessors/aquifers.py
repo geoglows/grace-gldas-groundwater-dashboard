@@ -17,6 +17,22 @@ gdf = (
 # fix a known typo "Bohemian Cretaceuos Basin" -> "Bohemian Cretaceous Basin"
 gdf.loc[gdf['Broader'] == 'Bohemian Cretaceuos Basin', 'Broader'] = 'Bohemian Cretaceous Basin'
 
+# drop basins that should not be shown
+excluded_basins = [
+    'Vienna Basin',
+    'Bohemian Cretaceous Basin',
+    'Escalante Valley',
+    'Blythe Basin',
+    'Salt Basin',
+    'Caborca Aquifer System',
+    'Gippsland Basin',
+    'St Vincent Basin',
+    'Perth Basin',
+    'Lower Athabasca Basin',
+    'Urucuia Aquifer System',
+]
+gdf = gdf[~gdf['Broader'].isin(excluded_basins)]
+
 # drop rows where the area is less than 100 sq km
 gdf = gdf[gdf.geometry.to_crs(epsg=6933).area > 100e6]
 gdf = gdf[gdf['Broader'] != '']
@@ -28,10 +44,3 @@ gdf = gdf[['Broader', 'id', 'geometry']].rename(columns={'Broader': 'n'})
 
 gdf.to_parquet('./aquifers.parquet', index=False, engine='pyarrow', compression='gzip')
 gdf.to_file('./aquifers.geojson', driver='GeoJSON')
-
-# table = [
-#     f'<tr><td>{row.n}</td><td><button data-aquifer-id="{row.id}">Open Aquifer</button></td></tr>'
-#     for row in gdf[['n', 'id']].itertuples()
-# ]
-# with open('./aquifers_table.html', 'w') as f:
-#     f.write('\n'.join(table))

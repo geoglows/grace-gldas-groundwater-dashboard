@@ -1,8 +1,10 @@
 // ---- IndexedDB minimal helpers ----
-import {FetchStore, get, open} from "zarrita";
+import {get} from "zarrita";
+
+import {openZarrArray} from "./zarrStore.js";
 
 const DB_NAME = "gldas-zarr-cache";
-const DB_VERSION = 3;
+const DB_VERSION = 20260707.1;
 const STORE_NAME = "arrays";
 
 function openCacheDB() {
@@ -96,8 +98,15 @@ async function getOrFetch1DCoord(zarrUrl, varName) {
   }
 
   // 2) Fetch from Zarr
-  const arr = await open.v3(new FetchStore(`${zarrUrl}/${varName}`));
+  const arr = await openZarrArray(zarrUrl, varName);
   const z = await get(arr, [null]); // z.data is a TypedArray in zarrita
+
+  // A coordinate chunk swallowed by a transient (CORS-hidden) fetch error
+  // comes back as fill-value NaNs; caching that would break the app until the
+  // next DB version bump, so fail loudly instead.
+  if (z.data.some((v) => !Number.isFinite(v))) {
+    throw new Error(`Coordinate array ${varName} contains non-finite values; the data service may be temporarily unavailable`);
+  }
 
   // 3) Store in IDB
   await idbPut(packTypedArray(key, zarrUrl, varName, z, z.data));

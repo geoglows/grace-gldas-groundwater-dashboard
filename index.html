@@ -11,8 +11,11 @@
 <div class="nav-bar">
   <h1>GRACE Regional Groundwater Analyst</h1>
   <div class="nav-buttons">
-    <button id="refresh-layers" class="icon-button" title="Reset">
-      <calcite-icon icon="refresh" scale="l"></calcite-icon>
+    <button id="global-view-button" class="icon-button" title="Animate the Whole World">
+      <calcite-icon icon="globe" scale="l"></calcite-icon>
+    </button>
+    <button id="refresh-layers" class="icon-button" title="Aquifer Scale View">
+      <calcite-icon icon="freehand-area" scale="l"></calcite-icon>
     </button>
     <button id="upload-button" class="icon-button" title="Upload GeoJSON">
       <calcite-icon icon="upload" scale="l"></calcite-icon>
@@ -26,7 +29,7 @@
   </div>
 </div>
 <div class="body">
-  <arcgis-map id="aquifer-map" item-id="a69f14ea2e784e019f4a4b6835ffd376" zoom="2" center="0,20" class="map-view">
+  <arcgis-map id="aquifer-map" basemap="topo-vector" zoom="4" center="0,20" class="map-view">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
@@ -34,17 +37,100 @@
     </arcgis-expand>
     <!-- Top-right: Config/Info -->
     <arcgis-sketch slot="top-right" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
-<!--    <arcgis-layer-list slot="top-right"></arcgis-layer-list>-->
-    <!-- Bottom-left: Reference -->
-    <arcgis-expand slot="bottom-left" title="Legend" expand-icon="legend">
-      <arcgis-legend></arcgis-legend>
-    </arcgis-expand>
     <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
   </arcgis-map>
   <!-- Full-width time slider between the map and the chart, bound to the map via reference-element -->
   <arcgis-time-slider class="time-slider-bar" reference-element="aquifer-map" play-rate="1000" layout="wide"></arcgis-time-slider>
-  <div id="timeseries-plot" class="chart-container">
-    <div class="centered-message">Select an aquifer, draw a polygon, or upload a boundary geojson to get started.</div>
+  <!-- Starts hidden so the page is natively laid out for the global (whole-world)
+       view — the map fills the full height and never resizes on load. The
+       regional view (exitGlobalView) reveals this chart when needed. -->
+  <div id="timeseries-plot" class="chart-container hidden">
+    <div class="centered-message">Select an aquifer, draw a polygon, upload a boundary geojson, or press the globe button to animate the whole world.</div>
+  </div>
+</div>
+
+<!-- Overlays docked inside the map UI via view.ui.add(), which moves them into
+     the arcgis-map component's shadow DOM: page stylesheets no longer reach
+     them there, so each carries its own scoped <style>. -->
+<div id="global-progress" class="global-progress hidden">
+  <style>
+      .global-progress {
+          width: 220px;
+          background: rgba(255, 255, 255, 0.92);
+          border-radius: 4px;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          padding: 8px 12px;
+          font-size: 12px;
+          font-family: Arial, sans-serif;
+      }
+
+      .global-progress.hidden {
+          display: none;
+      }
+
+      .global-progress-track {
+          height: 8px;
+          margin-top: 6px;
+          background: #ddd;
+          border-radius: 4px;
+          overflow: hidden;
+      }
+
+      .global-progress-fill {
+          height: 100%;
+          width: 0;
+          background: #0079c1;
+          transition: width 0.2s ease;
+      }
+  </style>
+  <div id="global-progress-label">Loading global data&hellip;</div>
+  <div class="global-progress-track">
+    <div id="global-progress-fill" class="global-progress-fill"></div>
+  </div>
+</div>
+<!-- Shared color-ramp legend for BOTH the regional (aquifer) view and the global
+     raster view; docked bottom-left via view.ui.add(). MediaLayer rasters don't
+     appear in the ArcGIS legend widget, and that widget has been removed, so this
+     single legend serves both. -->
+<div id="map-legend" class="map-legend hidden">
+  <style>
+      .map-legend {
+          width: 230px;
+          background: rgba(255, 255, 255, 0.92);
+          border-radius: 4px;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          padding: 8px 12px;
+          font-size: 12px;
+          font-family: Arial, sans-serif;
+      }
+
+      .map-legend.hidden {
+          display: none;
+      }
+
+      .map-legend-title {
+          font-weight: bold;
+          margin-bottom: 4px;
+      }
+
+      .map-legend-bar {
+          height: 12px;
+          border: 1px solid #999;
+          border-radius: 2px;
+      }
+
+      .map-legend-labels {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 2px;
+      }
+  </style>
+  <div class="map-legend-title">Liquid Water Equivalent (cm)</div>
+  <div id="map-legend-bar" class="map-legend-bar"></div>
+  <div class="map-legend-labels">
+    <span id="map-legend-min"></span>
+    <span>0</span>
+    <span id="map-legend-max"></span>
   </div>
 </div>
 
@@ -54,13 +140,22 @@
     <hr>
 
     <div class="settings-group">
-      <h3>Cell Borders</h3>
+      <h3>Layer</h3>
       <div class="setting-row">
-        <label for="border-toggle">Show borders</label>
+        <label for="opacity-slider">Layer opacity</label>
+        <input type="range" id="opacity-slider" min="0" max="1" step="0.05" value="1">
+        <span id="opacity-value">100%</span>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <h3>Cell Boundaries</h3>
+      <div class="setting-row">
+        <label for="border-toggle">Show cell boundaries</label>
         <input type="checkbox" id="border-toggle" checked>
       </div>
       <div class="setting-row">
-        <label for="border-width">Border width</label>
+        <label for="border-width">Boundary width</label>
         <input type="range" id="border-width" min="0.5" max="3" step="0.5" value="0.5">
         <span id="border-width-value">0.5px</span>
       </div>
@@ -140,11 +235,12 @@
     <ul>
       <li>Click on an aquifer boundary on the map, or</li>
       <li>Use the drawing tools (top-right of map) to draw a custom region, or</li>
-      <li>Upload a GeoJSON polygon file using the upload button (top-right of page)</li>
+      <li>Upload a GeoJSON polygon file using the upload button (top-right of page), or</li>
+      <li>Press the globe button (top-right of page) to animate the whole world's grid cells (~4&deg; tiles). The first load downloads a few MB and is cached for later visits; no time series chart is shown in this mode.</li>
     </ul>
     <p>The time series plot will display the mean groundwater storage anomaly for your selection.</p>
     <p>Use the time slider (bottom-right of map) to animate changes over time.</p>
-    <p>Click the refresh icon (top-right on the navigation bar) to reset the map layers and charts to make a fresh selection.</p>
+    <p>Click the aquifer scale view icon (top-right on the navigation bar) to reset the map layers and charts to make a fresh selection.</p>
     <button onclick="document.getElementById('info-modal').classList.toggle('hidden')">Close</button>
   </div>
 </div>
