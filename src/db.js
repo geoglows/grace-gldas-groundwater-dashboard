@@ -2,9 +2,7 @@
 import {FetchStore, get, open} from "zarrita";
 
 const DB_NAME = "gldas-zarr-cache";
-// Bump when the cached grid changes (e.g. 0.25deg -> 0.5deg GRACE) so stale
-// lat/lon coords are cleared and refetched to match the current zarr.
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_NAME = "arrays";
 
 function openCacheDB() {

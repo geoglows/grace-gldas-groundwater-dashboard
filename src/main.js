@@ -89,8 +89,11 @@ const generateStops = () => {
   });
 };
 
-// const zarrUrl = "https://d2grb3c773p1iz.cloudfront.net/groundwater/GRC025.zarr3";
-const zarrUrl = "http://localhost:5173/GRC_final.zarr3";
+// No trailing slash: reads build `${zarrUrl}/${name}`, and a trailing slash
+// would produce a `//` that S3/CloudFront rejects (403 on the doubled key).
+// The CloudFront distribution must return CORS headers (Access-Control-Allow-
+// Origin) for this cross-origin fetch to work in the browser.
+const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const arcgisLayerList = document.querySelector("arcgis-layer-list");
@@ -111,14 +114,10 @@ displayConfig.showBorders = borderToggle.checked;
 const openArray = (name) => open.v3(new FetchStore(`${zarrUrl}/${name}`));
 
 const coordsPromise = getOrFetchCoords({zarrUrl});
-const [
-  gwaNode, gwaUncNode, timeNode
-] = await Promise.all([
-  openArray("gw_lwe_thickness"), openArray("gw_uncertainty"), openArray("time")
-]);
+const [gwsaNode, gwsaUncNode, timeNode] = await Promise.all([openArray("GWSa"), openArray("GWSa_unc"), openArray("time")]);
 const timeIntegers = await get(timeNode, [null]);
 const timeDates = Array.from(timeIntegers.data).map((t) => {
-  const baseDate = new Date(Date.UTC(2002, 3, 1)); // April 1, 2002
+  const baseDate = new Date(Date.UTC(2000, 0, 1)); // time units: days since 2000-01-01
   baseDate.setUTCDate(baseDate.getUTCDate() + Number(t));
   return baseDate;
 });
@@ -208,8 +207,8 @@ const main = async ({polygon, zoomPromise}) => {
   const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
   // Fetch values and uncertainties, each parameter from its own dedicated array
   const readWindow = [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}];
-  let gwaValues = get(gwaNode, readWindow);
-  let gwaUncValues = get(gwaUncNode, readWindow);
+  let gwsaValues = get(gwsaNode, readWindow);
+  let gwsaUncValues = get(gwsaUncNode, readWindow);
 
   // ---- Find the overlapping areas of the cells with the polygon ----
   intersectionOperator.accelerateGeometry(polygon);
@@ -226,8 +225,8 @@ const main = async ({polygon, zoomPromise}) => {
   }
 
   // ---- Resolve zarr reads and compute averages
-  gwaValues = await gwaValues;
-  gwaUncValues = await gwaUncValues;
+  gwsaValues = await gwsaValues;
+  gwsaUncValues = await gwsaUncValues;
 
   // Get indices of cells that pass the display threshold (frac >= 0.35)
   const displayThreshold = 0.35;
@@ -252,7 +251,8 @@ const main = async ({polygon, zoomPromise}) => {
     }
     return max;
   };
-  const maxAbs = findMaxAbsForValidCells(gwaValues.data, gwaValues.shape, gwaValues.stride, validCellIndices);
+  // Color scale is driven by the mapped variable (GWSa)
+  const maxAbs = findMaxAbsForValidCells(gwsaValues.data, gwsaValues.shape, gwsaValues.stride, validCellIndices);
   displayConfig.maxValue = Math.ceil(maxAbs) || 30; // round up, fallback to 30 if no valid cells
 
   const weightedMeanTimeSeries = (data, shape, stride, cells, indices) => {
@@ -274,20 +274,30 @@ const main = async ({polygon, zoomPromise}) => {
     }
     return result;
   };
-  const gwaMeanTimeSeries = weightedMeanTimeSeries(gwaValues.data, gwaValues.shape, gwaValues.stride, intersectingCells, validCellIndices);
-  const gwaUncMeanTimeSeries = weightedMeanTimeSeries(gwaUncValues.data, gwaUncValues.shape, gwaUncValues.stride, intersectingCells, validCellIndices);
+  const gwsaMeanTimeSeries = weightedMeanTimeSeries(gwsaValues.data, gwsaValues.shape, gwsaValues.stride, intersectingCells, validCellIndices);
+  const gwsaUncMeanTimeSeries = weightedMeanTimeSeries(gwsaUncValues.data, gwsaUncValues.shape, gwsaUncValues.stride, intersectingCells, validCellIndices);
+
+  // Time steps where the selection actually has data. GRACE has missing months
+  // plus the GRACE/GRACE-FO gap; the slider only stops on populated dates.
+  const validTimeIndices = [];
+  for (let t = 0; t < timeDates.length; t++) {
+    if (Number.isFinite(gwsaMeanTimeSeries[t])) validTimeIndices.push(t);
+  }
+  const validTimeDates = validTimeIndices.map((t) => timeDates[t]);
+  const firstValidStep = validTimeIndices.length ? validTimeIndices[0] : 0;
+  const sliderDates = validTimeDates.length ? validTimeDates : timeDates;
 
   // Generate the timeseries plot
   timeseriesPlotDiv.innerHTML = "";
   Plotly.newPlot(
     timeseriesPlotDiv,
     [
-      // GWA uncertainty band and line
-      createUncertaintyBand({x: timeDates, yArray: gwaMeanTimeSeries, uncertaintyArray: gwaUncMeanTimeSeries, color: "rgba(28,110,236,0.25)", name: "GWA"}),
-      createLinePlot({x: timeDates, y: gwaMeanTimeSeries, color: "#1c6eec", name: "GWA"}),
+      // GWS uncertainty band and line
+      createUncertaintyBand({x: timeDates, yArray: gwsaMeanTimeSeries, uncertaintyArray: gwsaUncMeanTimeSeries, color: "rgba(28,110,236,0.25)", name: "GWS"}),
+      createLinePlot({x: timeDates, y: gwsaMeanTimeSeries, color: "#1c6eec", name: "GWS", uncertainty: gwsaUncMeanTimeSeries}),
     ],
     {
-      title: {text: "Groundwater Anomaly Time Series and Uncertainty", font: {size: 14, color: "#333"}, y: 0.97, yanchor: "top"},
+      title: {text: "Groundwater Storage Anomaly Time Series and Uncertainty", font: {size: 14, color: "#333"}, y: 0.97, yanchor: "top"},
       xaxis: {title: {text: "Time", font: {size: 12, color: "#333"}}, automargin: true},
       yaxis: {title: {text: "Liquid Water Equivalent (cm)", font: {size: 12, color: "#333"}}, automargin: true},
       showlegend: false,
@@ -307,12 +317,11 @@ const main = async ({polygon, zoomPromise}) => {
           name: "Download CSV",
           icon: Plotly.Icons.disk,
           click: function (gd) {
-            // Separate line traces from uncertainty band traces
+            // Line traces carry the center value (y) and per-point uncertainty
+            // (customdata); upper/lower are derived from those.
             const lineTraces = gd.data.filter(t => t.mode === "lines");
-            const bandTraces = gd.data.filter(t => t.fill === "toself");
 
             const dates = lineTraces[0]?.x || [];
-            const n = dates.length;
 
             // Build headers: Date, then for each series: value, upper, lower
             const headers = ["Date"];
@@ -326,15 +335,12 @@ const main = async ({polygon, zoomPromise}) => {
               const values = [dateStr];
 
               lineTraces.forEach((lineTrace) => {
-                const centerVal = lineTrace.y[i] ?? "";
-                // Find matching uncertainty band by legendgroup
-                const band = bandTraces.find(b => b.legendgroup === lineTrace.legendgroup);
-                let upperVal = "";
-                let lowerVal = "";
-                if (band && band.y.length === 2 * n) {
-                  upperVal = band.y[i] ?? "";
-                  lowerVal = band.y[2 * n - 1 - i] ?? "";
-                }
+                const center = lineTrace.y[i];
+                const unc = lineTrace.customdata?.[i];
+                const centerVal = Number.isFinite(center) ? center : "";
+                const hasBand = centerVal !== "" && Number.isFinite(unc);
+                const upperVal = hasBand ? center + unc : "";
+                const lowerVal = hasBand ? center - unc : "";
                 values.push(centerVal, upperVal, lowerVal);
               });
 
@@ -355,7 +361,7 @@ const main = async ({polygon, zoomPromise}) => {
     }
   );
 
-  // ---- Create single cell source with all 3 value fields ----
+  // ---- Create the cell source for the mapped variable (GWSa) ----
   const cellSource = intersectingCells
     .map(({lon, lat, frac, cell, intersects}, idx) => {
       if (!intersects || frac < displayThreshold) return null;
@@ -367,7 +373,7 @@ const main = async ({polygon, zoomPromise}) => {
           lon,
           lat,
           frac,
-          gwaValue: 0
+          gwsaValue: 0
         }
       });
     })
@@ -379,7 +385,7 @@ const main = async ({polygon, zoomPromise}) => {
     {name: "lon", type: "double"},
     {name: "lat", type: "double"},
     {name: "frac", type: "double"},
-    {name: "gwaValue", type: "double"}
+    {name: "gwsaValue", type: "double"}
   ];
 
   // Create renderer for a given field using current display config
@@ -404,14 +410,14 @@ const main = async ({polygon, zoomPromise}) => {
     };
   };
 
-  const gwaLayer = new FeatureLayer({
+  const gwsaLayer = new FeatureLayer({
     title: "GRACE Anomalies",
     source: cellSource,
     objectIdField: "oid",
     fields: cellFields,
     geometryType: "polygon",
     spatialReference: SpatialReference.WGS84,
-    renderer: createRenderer("gwaValue"),
+    renderer: createRenderer("gwsaValue"),
     visible: true
   });
 
@@ -419,7 +425,7 @@ const main = async ({polygon, zoomPromise}) => {
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
   await zoomPromise;
-  arcgisMap.map.layers.add(gwaLayer, 0);
+  arcgisMap.map.layers.add(gwsaLayer, 0);
 
   // ---- precompute lookup from feature idx -> oid ----
   const oids = cellSource.map(g => g.attributes.oid);
@@ -430,8 +436,8 @@ const main = async ({polygon, zoomPromise}) => {
 
   const updateMapToTimeStep = (timeStep) => {
     editsInFlight = editsInFlight.then(async () => {
-      const nLon = gwaValues.shape[2];
-      const nLat = gwaValues.shape[1];
+      const nLon = gwsaValues.shape[2];
+      const nLat = gwsaValues.shape[1];
       const base = timeStep * nLat * nLon;
 
       // Build update array with the groundwater value for each cell
@@ -441,12 +447,12 @@ const main = async ({polygon, zoomPromise}) => {
         updateFeatures[i] = new Graphic({
           attributes: {
             oid: oids[i],
-            gwaValue: gwaValues.data[base + idx]
+            gwsaValue: gwsaValues.data[base + idx]
           }
         });
       }
 
-      await gwaLayer.applyEdits({updateFeatures});
+      await gwsaLayer.applyEdits({updateFeatures});
 
       Plotly
         .relayout(
@@ -466,16 +472,16 @@ const main = async ({polygon, zoomPromise}) => {
     }).catch(console.error);
   };
 
-  // update the timeSlider web component
+  // update the timeSlider web component — stops only on dates that have data
   timeSlider.mode = "instant";
   timeSlider.fullTimeExtent = {
-    start: timeDates[0],
-    end: timeDates[timeDates.length - 1]
+    start: sliderDates[0],
+    end: sliderDates[sliderDates.length - 1]
   };
-  timeSlider.stops = {dates: timeDates};
+  timeSlider.stops = {dates: sliderDates};
   timeSlider.timeExtent = {
-    start: timeDates[0],
-    end: timeDates[0]
+    start: sliderDates[0],
+    end: sliderDates[0]
   };
   timeSlider.labelsVisible = true;
 
@@ -490,7 +496,7 @@ const main = async ({polygon, zoomPromise}) => {
   );
 
   // initial draw
-  updateMapToTimeStep(0);
+  updateMapToTimeStep(firstValidStep);
 }
 
 const resetLayers = () => {
