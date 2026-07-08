@@ -4,7 +4,7 @@ import {get} from "zarrita";
 import {openZarrArray} from "./zarrStore.js";
 
 const DB_NAME = "gldas-zarr-cache";
-const DB_VERSION = 20260707.3;
+const DB_VERSION = 20260707.4;
 const STORE_NAME = "arrays";
 
 function openCacheDB() {
@@ -22,6 +22,22 @@ function openCacheDB() {
 
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+  });
+}
+
+// Delete the whole cache database (coords + global frame buffers) so the next
+// load starts from the true first-visit condition, refetching everything from
+// the network. Resolves once the delete completes; `onblocked` fires if another
+// tab still holds the DB open, so warn but don't hang.
+export function clearCacheDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      console.warn(`Clearing "${DB_NAME}" is blocked by another open connection; it will delete once all tabs release it.`);
+      resolve(true);
+    };
   });
 }
 

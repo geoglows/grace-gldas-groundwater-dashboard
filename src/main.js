@@ -27,7 +27,7 @@ import Plotly from "plotly.js/lib/core";
 import Scatter from "plotly.js/lib/scatter";
 
 import {cellPolygonFromCenter} from "./cells.js";
-import {getOrFetchCoords} from "./db.js";
+import {clearCacheDB, getOrFetchCoords} from "./db.js";
 import {computeFrameStats, loadGlobalFrames} from "./globalData.js";
 import {createGlobalRenderer} from "./globalLayer.js";
 import {createLinePlot, createUncertaintyBand} from "./helpers.js";
@@ -100,7 +100,7 @@ const generateStops = () => {
 // This store now holds 1° cells with time-major chunking (full time series per
 // spatial chunk), so the whole-world animation reads it directly instead of a
 // separate downsampled "vis" copy.
-const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance.zarr";
+const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggg/grace-gldas-water-balance.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const sketchTool = document.getElementById("sketch-tool");
@@ -121,6 +121,19 @@ const openArray = (name) => openZarrArray(zarrUrl, name);
 
 const coordsPromise = getOrFetchCoords({zarrUrl});
 const [gwsaNode, gwsaUncNode, timeNode] = await Promise.all([openArray("GWSa"), openArray("GWSa_unc"), openArray("time")]);
+
+// GWSa is stored as int16 (cm, no scale factor) with a sentinel fill value for
+// missing months / the GRACE gap; zarrita hands those back as the raw integer,
+// not NaN, so mask them before any of the NaN-aware math runs. GWSa_unc and the
+// coords are float arrays already filled with NaN, so they need no masking.
+const GWSA_FILL = gwsaNode.attrs?._FillValue ?? -32768;
+// Copy a zarr read into a float view with the sentinel replaced by NaN, keeping
+// the same shape/stride so the downstream indexing math is unchanged.
+const maskGwsaFill = ({data, shape, stride}) => {
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = data[i] === GWSA_FILL ? NaN : data[i];
+  return {data: out, shape, stride};
+};
 const timeIntegers = await get(timeNode, [null]);
 const timeDates = Array.from(timeIntegers.data).map((t) => {
   const baseDate = new Date(Date.UTC(2000, 0, 1)); // time units: days since 2000-01-01
@@ -237,7 +250,7 @@ const setActiveViewButton = (mode) => {
   globalViewButton.classList.toggle("active", !regionalActive);
   globalViewButton.setAttribute("aria-pressed", String(!regionalActive));
 };
-setActiveViewButton("regional"); // regional/aquifer scale is the initial view
+setActiveViewButton("global"); // whole-world animation is the initial view
 
 // Route time-slider changes to whichever view is active (regional applyEdits
 // or global raster). A single watcher instead of one per analysis run.
@@ -370,7 +383,8 @@ const analyzeGlobalView = async () => {
   timeseriesPlotDiv.innerHTML = "";
   timeseriesPlotDiv.classList.add("hidden");
 
-  const zoomPromise = arcgisMap.view.goTo({center: [0, 20], zoom: 4}).catch(() => {});
+  const zoomPromise = arcgisMap.view.goTo({center: [0, 20], zoom: 4}).catch(() => {
+  });
 
   if (!globalView.renderer) globalView.renderer = createGlobalRenderer({title: "GRACE Anomalies (Global)"});
   if (!arcgisMap.map.layers.includes(globalView.renderer.layer)) {
@@ -474,8 +488,8 @@ const main = async ({polygon, zoomPromise}) => {
   }
 
   // ---- Resolve zarr reads and compute averages
-  gwsaValues = await gwsaValues;
-  gwsaUncValues = await gwsaUncValues;
+  gwsaValues = maskGwsaFill(await gwsaValues); // int16 sentinel -> NaN
+  gwsaUncValues = await gwsaUncValues;         // float16, already NaN-filled
   if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
 
   // Get indices of cells that pass the display threshold (frac >= 0.35)
@@ -784,6 +798,10 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
     .querySelector("#global-view-button")
     .addEventListener("click", () => analyzeGlobalView());
 
+  // Global whole-world animation is the default view; enter it now that the map
+  // is ready so the loading screen shows and the world fills in on first paint.
+  analyzeGlobalView();
+
   sketchTool.availableCreateTools = ["polygon"];
   sketchTool.hideSelectionToolsRectangleSelection = true;
   sketchTool.hideSelectionToolsLassoSelection = true;
@@ -808,6 +826,24 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
 
   document.getElementById("settings-close").addEventListener("click", () => {
     settingsModal.classList.add("hidden");
+  });
+
+  // Clear the IndexedDB cache so the next refresh reloads everything from the
+  // network (the true first-visit condition). We only delete the DB; the
+  // already-loaded in-memory data keeps this session running until refresh.
+  const clearCacheButton = document.getElementById("clear-cache-button");
+  const clearCacheStatus = document.getElementById("clear-cache-status");
+  clearCacheButton.addEventListener("click", async () => {
+    clearCacheButton.disabled = true;
+    clearCacheStatus.textContent = "Clearing…";
+    try {
+      await clearCacheDB();
+      clearCacheStatus.textContent = "Cleared. Refresh to reload from the network.";
+    } catch (err) {
+      console.error("Failed to clear the cache database", err);
+      clearCacheStatus.textContent = "Failed to clear cache. See console.";
+      clearCacheButton.disabled = false;
+    }
   });
 
   settingsModal.addEventListener("click", (e) => {
@@ -1012,22 +1048,4 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
       uploadSubmit.textContent = "Analyze";
     }
   });
-
-  // deep links: ?aquifer=<id> opens an aquifer analysis directly; otherwise the
-  // app starts on the whole-world view (the former ?global default).
-  const searchParams = new URLSearchParams(window.location.search);
-  if (searchParams.has("aquifer")) {
-    const aquiferId = parseInt(searchParams.get("aquifer"), 10);
-    if (Number.isFinite(aquiferId)) {
-      document.getElementById("info-modal").classList.add("hidden");
-      analyzeGlobalAquifer({aquiferId}).catch((err) => {
-        // unknown id: put the boundaries back instead of leaving them all
-        // filtered out by the unmatched definitionExpression
-        console.error(`Could not analyze aquifer ${aquiferId}`, err);
-        resetLayers();
-      });
-    }
-  } else {
-    analyzeGlobalView();
-  }
 });

@@ -159,6 +159,31 @@
     background: #005a8c;
 }
 
+.danger-button {
+    padding: 8px 16px;
+    border: 1px solid #b3261e;
+    border-radius: 4px;
+    background: #d32f2f;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.danger-button:hover {
+    background: #b3261e;
+}
+
+.danger-button:disabled {
+    background: #e0a3a3;
+    border-color: #e0a3a3;
+    cursor: default;
+}
+
+#clear-cache-status {
+    font-size: 13px;
+    color: #555;
+}
+
 /* Upload Modal Styles */
 .upload-modal {
     max-width: 500px;

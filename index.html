@@ -11,10 +11,13 @@
 <div class="nav-bar">
   <h1>GRACE Regional Groundwater Analyst</h1>
   <div class="nav-buttons">
-    <button id="global-view-button" class="icon-button" title="Animate the Whole World">
+    <!-- The whole-world animation is the default view, so this button starts
+         pressed and the markup below is laid out for it (loading bar shown,
+         chart hidden). JS keeps these in sync but doesn't create the state. -->
+    <button id="global-view-button" class="icon-button active" title="Animate the Whole World" aria-pressed="true">
       <calcite-icon icon="globe" scale="l"></calcite-icon>
     </button>
-    <button id="refresh-layers" class="icon-button" title="Aquifer Scale View">
+    <button id="refresh-layers" class="icon-button" title="Aquifer Scale View" aria-pressed="false">
       <calcite-icon icon="freehand-area" scale="l"></calcite-icon>
     </button>
     <button id="upload-button" class="icon-button" title="Upload GeoJSON">
@@ -53,7 +56,7 @@
 <!-- Overlays docked inside the map UI via view.ui.add(), which moves them into
      the arcgis-map component's shadow DOM: page stylesheets no longer reach
      them there, so each carries its own scoped <style>. -->
-<div id="global-progress" class="global-progress hidden">
+<div id="global-progress" class="global-progress">
   <style>
       .global-progress {
           width: 220px;
@@ -218,6 +221,15 @@
         <input type="checkbox" id="dynamic-scale-toggle" checked>
       </div>
       <p class="setting-description">When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -30 to +30 cm.</p>
+    </div>
+
+    <div class="settings-group">
+      <h3>Cache</h3>
+      <p class="setting-description">Delete all locally cached data (coordinates and the global animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
+      <div class="setting-row">
+        <button id="clear-cache-button" class="danger-button">Clear cached data</button>
+        <span id="clear-cache-status"></span>
+      </div>
     </div>
 
     <div class="modal-buttons">

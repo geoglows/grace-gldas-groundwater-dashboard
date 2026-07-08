@@ -16,7 +16,13 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function loadGlobalFrames({gwsaNode, zarrUrl, onProgress}) {
   const [nT, nLat, nLon] = gwsaNode.shape;
-  const cacheKey = `global|${zarrUrl}|GWSa|f32|${nT}x${nLat}x${nLon}`;
+  // GWSa is int16 with a sentinel fill for missing months; convert it to NaN as
+  // chunks are unpacked so the Float32 frame buffer carries real gaps, not the
+  // raw integer sentinel. (GWSa_unc/coords are float arrays filled with NaN.)
+  const fill = gwsaNode.attrs?._FillValue ?? -32768;
+  // "nan" marks the buffer as fill-masked; bumping it invalidates any pre-mask
+  // cache that still has the raw int16 sentinel baked in.
+  const cacheKey = `global|${zarrUrl}|GWSa|f32nan|${nT}x${nLat}x${nLon}`;
 
   try {
     const cached = await idbGet(cacheKey);
@@ -103,7 +109,8 @@ export async function loadGlobalFrames({gwsaNode, zarrUrl, onProgress}) {
           const srcRow = tOffset + iy * sY;
           const outRow = outT + (y0 + iy) * nLon + x0;
           for (let ix = 0; ix < wW; ix++) {
-            const v = data[srcRow + ix * sX];
+            const raw = data[srcRow + ix * sX];
+            const v = raw === fill ? NaN : raw; // int16 sentinel -> NaN gap
             if (v === v) chunkHasData = true;
             frames[outRow + ix] = v;
           }
