@@ -5,10 +5,25 @@
   <link rel="icon" type="image/svg+xml" href="/vite.svg"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>GRACE Regional Groundwater Analyst</title>
+  <script>
+    // Capture window.location synchronously BEFORE the module bundle is
+    // fetched so the password-recovery snapshot in src/auth-bootstrap.js
+    // can read the original hash even after Supabase JS has consumed and
+    // cleared it. Bundler module-evaluation ordering doesn't always match
+    // source-level import order — see aquiferx 2026-05-01 race fix.
+    window.__GEOGLOWS_INITIAL_URL__ = {
+      hash: window.location.hash,
+      search: window.location.search,
+    };
+  </script>
   <script type="module" src="/src/main.js" defer></script>
 </head>
 <body>
 <div class="nav-bar">
+  <a class="back-to-portal" href="/" aria-label="GEOGloWS Portal">
+    <svg class="back-to-portal-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>
+    <span>GEOGLOWS Portal</span>
+  </a>
   <h1>GRACE Regional Groundwater Analyst</h1>
   <div class="nav-buttons">
     <!-- The whole-world animation is the default view, so this button starts
@@ -27,6 +42,7 @@
       <calcite-icon icon="gear" scale="l"></calcite-icon>
     </button>
   </div>
+  <div id="auth-action" class="nav-auth"></div>
 </div>
 <div class="body">
   <arcgis-map id="aquifer-map" basemap="gray-vector" zoom="4" center="0,20" class="map-view">
