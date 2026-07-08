@@ -4,7 +4,7 @@ import {get} from "zarrita";
 import {openZarrArray} from "./zarrStore.js";
 
 const DB_NAME = "gldas-zarr-cache";
-const DB_VERSION = 20260707.1;
+const DB_VERSION = 20260707.3;
 const STORE_NAME = "arrays";
 
 function openCacheDB() {
@@ -115,8 +115,7 @@ async function getOrFetch1DCoord(zarrUrl, varName) {
 }
 
 async function getOrFetchCoords({zarrUrl}) {
-  // lats: [-59.875 to 89.875 by 0.25] should be 600
-  // lons: [-179.875 to 179.875 by 0.25] should be 1440
+  // 1° cells: lat length 150 (~-60 to 90), lon length 360 (~-180 to 180)
   const [lon, lat] = await Promise.all([
     getOrFetch1DCoord(zarrUrl, "lon"),
     getOrFetch1DCoord(zarrUrl, "lat")

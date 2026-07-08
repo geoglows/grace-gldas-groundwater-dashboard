@@ -101,14 +101,14 @@ const generateStops = () => {
 // would produce a `//` that S3/CloudFront rejects (403 on the doubled key).
 // The CloudFront distribution must return CORS headers (Access-Control-Allow-
 // Origin) for this cross-origin fetch to work in the browser.
+// This store now holds 1° cells with time-major chunking (full time series per
+// spatial chunk), so the whole-world animation reads it directly instead of a
+// separate downsampled "vis" copy.
 const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance.zarr";
-// Companion copy of GWSa downsampled (~4°x4° tiles) for the whole-world
-// animation: the full dataset is only a few MB there instead of ~30 MB.
-const visZarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance-vis.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const sketchTool = document.querySelector("arcgis-sketch");
-const timeSlider = document.querySelector("arcgis-time-slider");
+const timeSlider = document.getElementById("time-slider");
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
 const appInstructions = timeseriesPlotDiv.innerHTML
 // Settings modal
@@ -316,7 +316,7 @@ const pickPreviewTimeStep = ({frames, nT, nLat, nLon}) => {
 const ensureGlobalData = () => {
   if (!globalView.dataPromise) {
     globalView.dataPromise = (async () => {
-      const {lat, lon} = await getOrFetchCoords({zarrUrl: visZarrUrl});
+      const {lat, lon} = await getOrFetchCoords({zarrUrl});
       globalView.cellSize = lat.data[1] - lat.data[0];
       globalView.lat0 = lat.data[0];
       globalView.lon0 = lon.data[0];
@@ -326,10 +326,10 @@ const ensureGlobalData = () => {
       let lastPreviewAt = 0;
       // dedicated node: the global loader wants opaque CORS errors confirmed
       // twice before accepting a chunk as missing (it caches what it reads)
-      const globalGwsaNode = await openZarrArray(visZarrUrl, "GWSa", {confirmOpaqueErrors: true});
+      const globalGwsaNode = await openZarrArray(zarrUrl, "GWSa", {confirmOpaqueErrors: true});
       const data = await loadGlobalFrames({
         gwsaNode: globalGwsaNode,
-        zarrUrl: visZarrUrl,
+        zarrUrl,
         onProgress: (fraction, partial) => {
           if (!globalView.active) return;
           updateGlobalProgress(fraction);
@@ -775,11 +775,11 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   // view we start in (global by default), so don't fit to the boundary extent here.
   boundaryLayer.load();
 
-  // dock the overlays inside the map UI: the load-progress bar top-right, and
-  // the shared color-ramp legend bottom-left (where the ArcGIS legend widget
-  // used to live).
+  // dock the overlays inside the map UI: the load-progress bar and shared
+  // color-ramp legend top-right, and the compact time slider bottom-left.
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
-  arcgisMap.view.ui.add(mapLegendDiv, "bottom-left");
+  arcgisMap.view.ui.add(mapLegendDiv, "top-right");
+  arcgisMap.view.ui.add(timeSlider, "bottom-left");
 
   document
     .querySelector("#global-view-button")

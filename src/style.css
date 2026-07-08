@@ -76,12 +76,6 @@ arcgis-map {
     border-bottom: 2px solid black;
 }
 
-.time-slider-bar {
-    flex: 0 0 auto;
-    width: 100%;
-    border-bottom: 2px solid black;
-}
-
 .chart-container {
     flex: 0 0 32%;
     width: 100%;

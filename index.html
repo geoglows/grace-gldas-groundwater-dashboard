@@ -36,8 +36,6 @@
     <arcgis-sketch slot="top-right" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
     <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
   </arcgis-map>
-  <!-- Full-width time slider between the map and the chart, bound to the map via reference-element -->
-  <arcgis-time-slider class="time-slider-bar" reference-element="aquifer-map" play-rate="1000" layout="wide"></arcgis-time-slider>
   <!-- Starts hidden so the page is natively laid out for the global (whole-world)
        view — the map fills the full height and never resizes on load. The
        regional view (exitGlobalView) reveals this chart when needed. -->
@@ -45,6 +43,10 @@
     <div class="centered-message">Select an aquifer, draw a polygon, upload a boundary geojson, or press the globe button to animate the whole world.</div>
   </div>
 </div>
+
+<!-- Compact time slider, docked bottom-left over the map via view.ui.add() so it
+     stacks with the legend in the same corner instead of overlapping it. -->
+<arcgis-time-slider id="time-slider" reference-element="aquifer-map" play-rate="1000" layout="compact"></arcgis-time-slider>
 
 <!-- Overlays docked inside the map UI via view.ui.add(), which moves them into
      the arcgis-map component's shadow DOM: page stylesheets no longer reach
