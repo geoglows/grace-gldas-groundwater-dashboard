@@ -107,7 +107,6 @@ const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-ba
 const visZarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance-vis.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
-const arcgisLayerList = document.querySelector("arcgis-layer-list");
 const sketchTool = document.querySelector("arcgis-sketch");
 const timeSlider = document.querySelector("arcgis-time-slider");
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
@@ -803,19 +802,6 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   document
     .querySelector("#refresh-layers")
     .addEventListener("click", async () => resetLayers());
-
-  document
-    .querySelector("#info-button")
-    .addEventListener("click", () => {
-      document.getElementById("info-modal").classList.toggle("hidden");
-    });
-
-  // Close modal when clicking outside the content
-  document.getElementById("info-modal").addEventListener("click", (e) => {
-    if (e.target.id === "info-modal") {
-      e.target.classList.add("hidden");
-    }
-  });
 
   document.querySelector("#settings-button").addEventListener("click", () => {
     settingsModal.classList.toggle("hidden");
