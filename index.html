@@ -26,16 +26,18 @@
   </div>
 </div>
 <div class="body">
-  <arcgis-map id="aquifer-map" basemap="topo-vector" zoom="4" center="0,20" class="map-view">
+  <arcgis-map id="aquifer-map" basemap="gray-vector" zoom="4" center="0,20" class="map-view">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
       <arcgis-basemap-gallery></arcgis-basemap-gallery>
     </arcgis-expand>
-    <!-- Top-right: Config/Info -->
-    <arcgis-sketch slot="top-right" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
     <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
   </arcgis-map>
+
+  <!-- Drawing tools, docked top-right via view.ui.add() so they stack with the
+       progress bar and legend in the same corner instead of overlapping them. -->
+  <arcgis-sketch id="sketch-tool" reference-element="aquifer-map" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
   <!-- Starts hidden so the page is natively laid out for the global (whole-world)
        view — the map fills the full height and never resizes on load. The
        regional view (exitGlobalView) reveals this chart when needed. -->
@@ -151,7 +153,7 @@
       <h3>Cell Boundaries</h3>
       <div class="setting-row">
         <label for="border-toggle">Show cell boundaries</label>
-        <input type="checkbox" id="border-toggle" checked>
+        <input type="checkbox" id="border-toggle">
       </div>
       <div class="setting-row">
         <label for="border-width">Boundary width</label>

@@ -11,10 +11,6 @@ import "@arcgis/map-components/components/arcgis-expand";
 import "@arcgis/map-components/components/arcgis-basemap-gallery";
 import "@arcgis/map-components/components/arcgis-sketch";
 import "@arcgis/map-components/components/arcgis-time-slider";
-// ArcGIS 5 makes @esri/calcite-components a peer dependency. The map components
-// auto-register the calcite elements they use internally, but <calcite-icon> is
-// used standalone in the nav/upload markup, so register it explicitly here.
-// Icon assets resolve via the asset path the map components already configure.
 import "@esri/calcite-components/components/calcite-icon";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
@@ -22,7 +18,7 @@ import Graphic from "@arcgis/core/Graphic.js";
 import SpatialReference from "@arcgis/core/geometry/SpatialReference.js";
 import * as intersectionOperator from "@arcgis/core/geometry/operators/intersectionOperator.js";
 import * as shapePreservingProjectOperator from "@arcgis/core/geometry/operators/shapePreservingProjectOperator.js";
-import * as geometryEngine from "@arcgis/core/geometry/geometryEngine.js";
+import * as geodeticAreaOperator from "@arcgis/core/geometry/operators/geodeticAreaOperator.js";
 import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 
 import {get} from "zarrita";
@@ -107,7 +103,7 @@ const generateStops = () => {
 const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggst/grace-gldas-water-balance.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
-const sketchTool = document.querySelector("arcgis-sketch");
+const sketchTool = document.getElementById("sketch-tool");
 const timeSlider = document.getElementById("time-slider");
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
 const appInstructions = timeseriesPlotDiv.innerHTML
@@ -463,14 +459,15 @@ const main = async ({polygon, zoomPromise}) => {
   let gwsaUncValues = get(gwsaUncNode, readWindow);
 
   // ---- Find the overlapping areas of the cells with the polygon ----
+  if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
   intersectionOperator.accelerateGeometry(polygon);
   const intersectingCells = [];
   for (const y of filteredLats) {
     for (const x of filteredLons) {
       const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
-      const cellArea = geometryEngine.geodesicArea(cell);
+      const cellArea = geodeticAreaOperator.execute(cell);
       const intersectsGeom = intersectionOperator.execute(polygon, cell);
-      const intersectArea = intersectsGeom ? geometryEngine.geodesicArea(intersectsGeom) : 0;
+      const intersectArea = intersectsGeom ? geodeticAreaOperator.execute(intersectsGeom) : 0;
       const frac = intersectArea / cellArea;
       intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
     }
@@ -775,8 +772,10 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   // view we start in (global by default), so don't fit to the boundary extent here.
   boundaryLayer.load();
 
-  // dock the overlays inside the map UI: the load-progress bar and shared
-  // color-ramp legend top-right, and the compact time slider bottom-left.
+  // dock the overlays inside the map UI, adding them to each corner in stack
+  // order: top-right holds the drawing tools, then the load-progress bar, then
+  // the shared color-ramp legend; the compact time slider sits bottom-left.
+  arcgisMap.view.ui.add(sketchTool, "top-right");
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
   arcgisMap.view.ui.add(timeSlider, "bottom-left");
