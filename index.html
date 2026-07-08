@@ -23,9 +23,6 @@
     <button id="settings-button" class="icon-button" title="Settings">
       <calcite-icon icon="gear" scale="l"></calcite-icon>
     </button>
-    <button id="info-button" class="icon-button" title="Info">
-      <calcite-icon icon="information" scale="l"></calcite-icon>
-    </button>
   </div>
 </div>
 <div class="body">
@@ -222,26 +219,6 @@
     <div class="modal-buttons">
       <button id="settings-close">Close</button>
     </div>
-  </div>
-</div>
-
-<div id="info-modal" class="modal">
-  <div class="modal-content">
-    <h2>GRACE Regional Groundwater Analyst</h2>
-    <p>This is an experimental implementation of an algorithm to identify changes in groundwater storage derived primarily from GRACE and GLDAS.</p>
-    <hr>
-    <p><strong>How to Use This Tool</strong></p>
-    <p>Select an area to analyze:</p>
-    <ul>
-      <li>Click on an aquifer boundary on the map, or</li>
-      <li>Use the drawing tools (top-right of map) to draw a custom region, or</li>
-      <li>Upload a GeoJSON polygon file using the upload button (top-right of page), or</li>
-      <li>Press the globe button (top-right of page) to animate the whole world's grid cells (~4&deg; tiles). The first load downloads a few MB and is cached for later visits; no time series chart is shown in this mode.</li>
-    </ul>
-    <p>The time series plot will display the mean groundwater storage anomaly for your selection.</p>
-    <p>Use the time slider (bottom-right of map) to animate changes over time.</p>
-    <p>Click the aquifer scale view icon (top-right on the navigation bar) to reset the map layers and charts to make a fresh selection.</p>
-    <button onclick="document.getElementById('info-modal').classList.toggle('hidden')">Close</button>
   </div>
 </div>
 

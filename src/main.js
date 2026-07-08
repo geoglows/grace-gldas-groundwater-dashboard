@@ -11,6 +11,11 @@ import "@arcgis/map-components/components/arcgis-expand";
 import "@arcgis/map-components/components/arcgis-basemap-gallery";
 import "@arcgis/map-components/components/arcgis-sketch";
 import "@arcgis/map-components/components/arcgis-time-slider";
+// ArcGIS 5 makes @esri/calcite-components a peer dependency. The map components
+// auto-register the calcite elements they use internally, but <calcite-icon> is
+// used standalone in the nav/upload markup, so register it explicitly here.
+// Icon assets resolve via the asset path the map components already configure.
+import "@esri/calcite-components/components/calcite-icon";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
