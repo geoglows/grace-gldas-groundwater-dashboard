@@ -55,8 +55,8 @@ function renderSlot() {
   const el = slot();
   if (!el) return;
   // Surgical: only the slot's innerHTML is replaced. The surrounding
-  // .nav-bar and .body are left alone — grace's ArcGIS map components have
-  // lifecycles that must not be torn down on auth-state changes.
+  // <header> and map container are left alone — grace's ArcGIS map components
+  // have lifecycles that must not be torn down on auth-state changes.
   // Profile link points at the portal's #profile route. Root-relative
   // "/#profile" works because grace is reached via the portal proxy in
   // production (same origin as apps.geoglows). The hash-only "#profile"

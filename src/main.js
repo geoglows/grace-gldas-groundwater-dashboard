@@ -1,13 +1,8 @@
-// Loaded FIRST so Supabase Auth's onAuthStateChange listener is registered
-// before any of grace's top-level zarr awaits (line ~110) start. INITIAL_SESSION
-// fires once Supabase JS finishes detectSessionInUrl; if we're awaiting zarr
-// when it fires, the listener doesn't exist yet and we miss the event.
 import "./auth-bootstrap.js";
 
-import "./style.css";
-import "./modal.css"
-
 import "@arcgis/core/assets/esri/themes/light/main.css";
+import "./style.css";
+
 import "@arcgis/map-components/components/arcgis-map";
 import "@arcgis/map-components/components/arcgis-zoom";
 import "@arcgis/map-components/components/arcgis-layer-list";
@@ -17,7 +12,6 @@ import "@arcgis/map-components/components/arcgis-expand";
 import "@arcgis/map-components/components/arcgis-basemap-gallery";
 import "@arcgis/map-components/components/arcgis-sketch";
 import "@arcgis/map-components/components/arcgis-time-slider";
-import "@esri/calcite-components/components/calcite-icon";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
@@ -37,10 +31,13 @@ import {clearCacheDB, getOrFetchCoords} from "./db.js";
 import {computeFrameStats, loadGlobalFrames} from "./globalData.js";
 import {createGlobalRenderer} from "./globalLayer.js";
 import {createLinePlot, createUncertaintyBand} from "./helpers.js";
+import {hydrateIcons} from "./icons.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
 import {openZarrArray} from "./zarrStore.js";
 
 Plotly.register([Scatter]);
+
+hydrateIcons();  // heroicons
 
 // Configuration state
 const displayConfig = {
@@ -99,13 +96,6 @@ const generateStops = () => {
   });
 };
 
-// No trailing slash: reads build `${zarrUrl}/${name}`, and a trailing slash
-// would produce a `//` that S3/CloudFront rejects (403 on the doubled key).
-// The CloudFront distribution must return CORS headers (Access-Control-Allow-
-// Origin) for this cross-origin fetch to work in the browser.
-// This store now holds 1° cells with time-major chunking (full time series per
-// spatial chunk), so the whole-world animation reads it directly instead of a
-// separate downsampled "vis" copy.
 const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggg/grace-gldas-water-balance.zarr";
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
@@ -128,13 +118,7 @@ const openArray = (name) => openZarrArray(zarrUrl, name);
 const coordsPromise = getOrFetchCoords({zarrUrl});
 const [gwsaNode, gwsaUncNode, timeNode] = await Promise.all([openArray("GWSa"), openArray("GWSa_unc"), openArray("time")]);
 
-// GWSa is stored as int16 (cm, no scale factor) with a sentinel fill value for
-// missing months / the GRACE gap; zarrita hands those back as the raw integer,
-// not NaN, so mask them before any of the NaN-aware math runs. GWSa_unc and the
-// coords are float arrays already filled with NaN, so they need no masking.
-const GWSA_FILL = gwsaNode.attrs?._FillValue ?? -32768;
-// Copy a zarr read into a float view with the sentinel replaced by NaN, keeping
-// the same shape/stride so the downstream indexing math is unchanged.
+const GWSA_FILL = gwsaNode.attrs?._FillValue ?? -9999;
 const maskGwsaFill = ({data, shape, stride}) => {
   const out = new Float32Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = data[i] === GWSA_FILL ? NaN : data[i];
@@ -246,14 +230,13 @@ const globalView = {
 // The regional (aquifer scale) and global buttons form a mutually-exclusive
 // group: whichever mode is active shows its button pressed. exitGlobalView()
 // and analyzeGlobalView() are the single choke points for the two modes, so the
-// indicator is flipped from there.
+// indicator is flipped from there. aria-pressed is the only state carrier —
+// Tailwind's aria-pressed: variant styles the pressed button off it.
 const regionalViewButton = document.querySelector("#refresh-layers");
 const globalViewButton = document.querySelector("#global-view-button");
 const setActiveViewButton = (mode) => {
   const regionalActive = mode === "regional";
-  regionalViewButton.classList.toggle("active", regionalActive);
   regionalViewButton.setAttribute("aria-pressed", String(regionalActive));
-  globalViewButton.classList.toggle("active", !regionalActive);
   globalViewButton.setAttribute("aria-pressed", String(!regionalActive));
 };
 setActiveViewButton("global"); // whole-world animation is the initial view
@@ -1011,18 +994,20 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
     resetUploadModal();
   });
 
+  // data-drag (not a class) so the highlight lives in the markup's Tailwind
+  // classes as a data-[drag=true]: variant.
   uploadDropZone.addEventListener("dragover", (e) => {
     e.preventDefault();
-    uploadDropZone.classList.add("drag-over");
+    uploadDropZone.dataset.drag = "true";
   });
 
   uploadDropZone.addEventListener("dragleave", () => {
-    uploadDropZone.classList.remove("drag-over");
+    delete uploadDropZone.dataset.drag;
   });
 
   uploadDropZone.addEventListener("drop", (e) => {
     e.preventDefault();
-    uploadDropZone.classList.remove("drag-over");
+    delete uploadDropZone.dataset.drag;
     if (e.dataTransfer.files.length > 0) {
       handleFileSelection(e.dataTransfer.files[0]);
     }

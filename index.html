@@ -1,16 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8"/>
   <link rel="icon" type="image/svg+xml" href="/vite.svg"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>GRACE Regional Groundwater Analyst</title>
+  <title>GRACE Groundwater Anomaly</title>
   <script>
-    // Capture window.location synchronously BEFORE the module bundle is
-    // fetched so the password-recovery snapshot in src/auth-bootstrap.js
-    // can read the original hash even after Supabase JS has consumed and
-    // cleared it. Bundler module-evaluation ordering doesn't always match
-    // source-level import order — see aquiferx 2026-05-01 race fix.
     window.__GEOGLOWS_INITIAL_URL__ = {
       hash: window.location.hash,
       search: window.location.search,
@@ -18,34 +13,40 @@
   </script>
   <script type="module" src="/src/main.js" defer></script>
 </head>
-<body>
-<div class="nav-bar">
-  <a class="back-to-portal" href="/" aria-label="GEOGloWS Portal">
-    <svg class="back-to-portal-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>
-    <span>GEOGLOWS Portal</span>
+<body class="flex h-full flex-col overflow-hidden bg-neutral-100 font-sans">
+<header class="flex h-[70px] w-full shrink-0 items-center gap-4 bg-[#81d4fa] px-4 shadow-md">
+  <a href="/" title="GEOGloWS Portal" aria-label="GEOGloWS Portal"
+     class="shrink-0 rounded focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-black/60">
+    <img src="/geoglows-logo-nav.png" alt="GEOGloWS" class="h-10 w-auto" style="max-width: 150px"/>
   </a>
-  <h1>GRACE Regional Groundwater Analyst</h1>
-  <div class="nav-buttons">
-    <!-- The whole-world animation is the default view, so this button starts
-         pressed and the markup below is laid out for it (loading bar shown,
-         chart hidden). JS keeps these in sync but doesn't create the state. -->
-    <button id="global-view-button" class="icon-button active" title="Animate the Whole World" aria-pressed="true">
-      <calcite-icon icon="globe" scale="l"></calcite-icon>
+
+  <h1 class="min-w-0 truncate text-xl font-bold text-black md:text-2xl">GRACE Regional Groundwater Analyst</h1>
+
+  <div class="ml-auto flex items-center gap-2">
+    <button id="global-view-button" title="Animate the Whole World" aria-pressed="true"
+            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black ring-2 ring-transparent transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60 aria-pressed:bg-black/70 aria-pressed:text-white aria-pressed:ring-white/90">
+      <span data-icon="globe-americas" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="refresh-layers" class="icon-button" title="Aquifer Scale View" aria-pressed="false">
-      <calcite-icon icon="freehand-area" scale="l"></calcite-icon>
+    <button id="refresh-layers" title="Aquifer Scale View" aria-pressed="false"
+            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black ring-2 ring-transparent transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60 aria-pressed:bg-black/70 aria-pressed:text-white aria-pressed:ring-white/90">
+      <span data-icon="map" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="upload-button" class="icon-button" title="Upload GeoJSON">
-      <calcite-icon icon="upload" scale="l"></calcite-icon>
+    <button id="upload-button" title="Upload GeoJSON"
+            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60">
+      <span data-icon="arrow-up-tray" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="settings-button" class="icon-button" title="Settings">
-      <calcite-icon icon="gear" scale="l"></calcite-icon>
+    <button id="settings-button" title="Settings"
+            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60">
+      <span data-icon="cog-6-tooth" class="block size-6" aria-hidden="true"></span>
     </button>
   </div>
-  <div id="auth-action" class="nav-auth"></div>
-</div>
-<div class="body">
-  <arcgis-map id="aquifer-map" basemap="gray-vector" zoom="4" center="0,20" class="map-view">
+
+  <div id="auth-action" class="flex shrink-0 items-center pl-2"></div>
+</header>
+
+<div class="flex min-h-0 w-full flex-1 flex-col">
+  <arcgis-map id="aquifer-map" basemap="gray-vector" zoom="4" center="0,20"
+              class="min-h-0 w-full flex-1 border-b-2 border-black">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
@@ -60,19 +61,20 @@
   <!-- Starts hidden so the page is natively laid out for the global (whole-world)
        view — the map fills the full height and never resizes on load. The
        regional view (exitGlobalView) reveals this chart when needed. -->
-  <div id="timeseries-plot" class="chart-container hidden">
-    <div class="centered-message">Select an aquifer, draw a polygon, upload a boundary geojson, or press the globe button to animate the whole world.</div>
+  <div id="timeseries-plot" class="hidden w-full shrink-0 grow-0 basis-[32%] bg-white">
+    <div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">
+      Select an aquifer, draw a polygon, upload a boundary geojson, or press the globe button to animate the whole world.
+    </div>
   </div>
 </div>
 
-<!-- Compact time slider, docked bottom-left over the map via view.ui.add() so it
-     stacks with the legend in the same corner instead of overlapping it. -->
-<arcgis-time-slider id="time-slider" reference-element="aquifer-map" play-rate="1000" layout="compact"></arcgis-time-slider>
+<arcgis-time-slider id="time-slider" reference-element="aquifer-map" play-rate="1000" layout="compact" class="absolute"></arcgis-time-slider>
 
 <!-- Overlays docked inside the map UI via view.ui.add(), which moves them into
-     the arcgis-map component's shadow DOM: page stylesheets no longer reach
-     them there, so each carries its own scoped <style>. -->
-<div id="global-progress" class="global-progress">
+     the arcgis-map component's shadow DOM: page stylesheets (including the
+     Tailwind utilities) no longer reach them there, so each carries its own
+     scoped <style>. -->
+<div id="global-progress" class="global-progress absolute">
   <style>
       .global-progress {
           width: 220px;
@@ -108,11 +110,7 @@
     <div id="global-progress-fill" class="global-progress-fill"></div>
   </div>
 </div>
-<!-- Shared color-ramp legend for BOTH the regional (aquifer) view and the global
-     raster view; docked bottom-left via view.ui.add(). MediaLayer rasters don't
-     appear in the ArcGIS legend widget, and that widget has been removed, so this
-     single legend serves both. -->
-<div id="map-legend" class="map-legend hidden">
+<div id="map-legend" class="map-legend absolute hidden">
   <style>
       .map-legend {
           width: 230px;
@@ -154,131 +152,151 @@
   </div>
 </div>
 
-<div id="settings-modal" class="modal hidden">
-  <div class="modal-content settings-modal">
-    <h2>Display Settings</h2>
-    <hr>
+<div id="settings-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">
+  <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">
+    <h2 class="text-2xl font-bold text-neutral-900">Display Settings</h2>
+    <hr class="my-4 border-t border-neutral-300"/>
 
-    <div class="settings-group">
-      <h3>Layer</h3>
-      <div class="setting-row">
-        <label for="opacity-slider">Layer opacity</label>
-        <input type="range" id="opacity-slider" min="0" max="1" step="0.05" value="1">
-        <span id="opacity-value">100%</span>
+    <div class="mb-6">
+      <h3 class="mb-3 text-base font-bold text-neutral-800">Layer</h3>
+      <div class="mb-3 flex items-center gap-3">
+        <label for="opacity-slider" class="min-w-[120px] text-sm">Layer opacity</label>
+        <input type="range" id="opacity-slider" min="0" max="1" step="0.05" value="1"
+               class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
+        <span id="opacity-value" class="min-w-[40px] text-sm text-neutral-600">100%</span>
       </div>
     </div>
 
-    <div class="settings-group">
-      <h3>Cell Boundaries</h3>
-      <div class="setting-row">
-        <label for="border-toggle">Show cell boundaries</label>
-        <input type="checkbox" id="border-toggle">
+    <div class="mb-6">
+      <h3 class="mb-3 text-base font-bold text-neutral-800">Cell Boundaries</h3>
+      <div class="mb-3 flex items-center gap-3">
+        <label for="border-toggle" class="min-w-[120px] text-sm">Show cell boundaries</label>
+        <input type="checkbox" id="border-toggle" class="size-[18px] cursor-pointer accent-sky-700">
       </div>
-      <div class="setting-row">
-        <label for="border-width">Boundary width</label>
-        <input type="range" id="border-width" min="0.5" max="3" step="0.5" value="0.5">
-        <span id="border-width-value">0.5px</span>
+      <div class="mb-3 flex items-center gap-3">
+        <label for="border-width" class="min-w-[120px] text-sm">Boundary width</label>
+        <input type="range" id="border-width" min="0.5" max="3" step="0.5" value="0.5"
+               class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
+        <span id="border-width-value" class="min-w-[40px] text-sm text-neutral-600">0.5px</span>
       </div>
     </div>
 
-    <div class="settings-group">
-      <h3>Color Palette</h3>
-      <p class="setting-description">Choose a color scheme for the anomaly visualization</p>
-      <div class="color-palette-options">
-        <label class="color-option">
-          <input type="radio" name="color-palette" value="default" checked>
-          <span class="color-preview">
-            <span class="color-swatch" style="background: linear-gradient(to right, #ff004e, #ffffff, #1c6eec);"></span>
-          </span>
-          <span class="color-label">Red-White-Blue (Default)</span>
+    <div class="mb-6">
+      <h3 class="mb-3 text-base font-bold text-neutral-800">Color Palette</h3>
+      <p class="mb-3 text-[13px] text-neutral-600">Choose a color scheme for the anomaly visualization</p>
+      <div class="flex flex-col gap-2">
+        <label class="flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50">
+          <input type="radio" name="color-palette" value="default" checked class="hidden">
+          <span class="block h-5 w-20 rounded-sm border border-neutral-300"
+                style="background: linear-gradient(to right, #ff004e, #ffffff, #1c6eec);"></span>
+          <span class="text-sm text-neutral-800">Red-White-Blue (Default)</span>
         </label>
-        <label class="color-option">
-          <input type="radio" name="color-palette" value="viridis">
-          <span class="color-preview">
-            <span class="color-swatch" style="background: linear-gradient(to right, #440154, #21918c, #fde725);"></span>
-          </span>
-          <span class="color-label">Viridis (Colorblind Safe)</span>
+        <label class="flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50">
+          <input type="radio" name="color-palette" value="viridis" class="hidden">
+          <span class="block h-5 w-20 rounded-sm border border-neutral-300"
+                style="background: linear-gradient(to right, #440154, #21918c, #fde725);"></span>
+          <span class="text-sm text-neutral-800">Viridis (Colorblind Safe)</span>
         </label>
-        <label class="color-option">
-          <input type="radio" name="color-palette" value="cividis">
-          <span class="color-preview">
-            <span class="color-swatch" style="background: linear-gradient(to right, #00204d, #7c7b78, #ffea46);"></span>
-          </span>
-          <span class="color-label">Cividis (Colorblind Safe)</span>
+        <label class="flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50">
+          <input type="radio" name="color-palette" value="cividis" class="hidden">
+          <span class="block h-5 w-20 rounded-sm border border-neutral-300"
+                style="background: linear-gradient(to right, #00204d, #7c7b78, #ffea46);"></span>
+          <span class="text-sm text-neutral-800">Cividis (Colorblind Safe)</span>
         </label>
-        <label class="color-option">
-          <input type="radio" name="color-palette" value="brown-teal">
-          <span class="color-preview">
-            <span class="color-swatch" style="background: linear-gradient(to right, #8c510a, #f5f5f5, #01665e);"></span>
-          </span>
-          <span class="color-label">Brown-Teal (Colorblind Safe)</span>
+        <label class="flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50">
+          <input type="radio" name="color-palette" value="brown-teal" class="hidden">
+          <span class="block h-5 w-20 rounded-sm border border-neutral-300"
+                style="background: linear-gradient(to right, #8c510a, #f5f5f5, #01665e);"></span>
+          <span class="text-sm text-neutral-800">Brown-Teal (Colorblind Safe)</span>
         </label>
-        <label class="color-option">
-          <input type="radio" name="color-palette" value="purple-green">
-          <span class="color-preview">
-            <span class="color-swatch" style="background: linear-gradient(to right, #762a83, #f7f7f7, #1b7837);"></span>
-          </span>
-          <span class="color-label">Purple-Green (Colorblind Safe)</span>
+        <label class="flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50">
+          <input type="radio" name="color-palette" value="purple-green" class="hidden">
+          <span class="block h-5 w-20 rounded-sm border border-neutral-300"
+                style="background: linear-gradient(to right, #762a83, #f7f7f7, #1b7837);"></span>
+          <span class="text-sm text-neutral-800">Purple-Green (Colorblind Safe)</span>
         </label>
-        <label class="color-option">
-          <input type="radio" name="color-palette" value="rainbow">
-          <span class="color-preview">
-            <span class="color-swatch" style="background: linear-gradient(to right, #d73027, #fee08b, #a6d96a, #1a6698);"></span>
-          </span>
-          <span class="color-label">Red-Yellow-Green-Blue</span>
+        <label class="flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50">
+          <input type="radio" name="color-palette" value="rainbow" class="hidden">
+          <span class="block h-5 w-20 rounded-sm border border-neutral-300"
+                style="background: linear-gradient(to right, #d73027, #fee08b, #a6d96a, #1a6698);"></span>
+          <span class="text-sm text-neutral-800">Red-Yellow-Green-Blue</span>
         </label>
       </div>
     </div>
 
-    <div class="settings-group">
-      <h3>Color Scale Range</h3>
-      <div class="setting-row">
-        <label for="dynamic-scale-toggle">Dynamic scale (fit to data)</label>
-        <input type="checkbox" id="dynamic-scale-toggle" checked>
+    <div class="mb-6">
+      <h3 class="mb-3 text-base font-bold text-neutral-800">Color Scale Range</h3>
+      <div class="mb-3 flex items-center gap-3">
+        <label for="dynamic-scale-toggle" class="min-w-[120px] text-sm">Dynamic scale (fit to data)</label>
+        <input type="checkbox" id="dynamic-scale-toggle" checked class="size-[18px] cursor-pointer accent-sky-700">
       </div>
-      <p class="setting-description">When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -30 to +30 cm.</p>
+      <p class="mb-3 text-[13px] text-neutral-600">When enabled, the color scale fits the actual min/max values in the
+        selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -30 to +30 cm.</p>
     </div>
 
-    <div class="settings-group">
-      <h3>Cache</h3>
-      <p class="setting-description">Delete all locally cached data (coordinates and the global animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
-      <div class="setting-row">
-        <button id="clear-cache-button" class="danger-button">Clear cached data</button>
-        <span id="clear-cache-status"></span>
+    <div class="mb-6">
+      <h3 class="mb-3 text-base font-bold text-neutral-800">Cache</h3>
+      <p class="mb-3 text-[13px] text-neutral-600">Delete all locally cached data (coordinates and the global
+        animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
+      <div class="mb-3 flex items-center gap-3">
+        <button id="clear-cache-button"
+                class="cursor-pointer rounded border border-red-800 bg-red-600 px-4 py-2 text-sm text-white transition hover:bg-red-800 disabled:cursor-default disabled:border-red-300 disabled:bg-red-300">
+          Clear cached data
+        </button>
+        <span id="clear-cache-status" class="text-[13px] text-neutral-600"></span>
       </div>
     </div>
 
-    <div class="modal-buttons">
-      <button id="settings-close">Close</button>
+    <div class="mt-5 flex justify-end gap-2.5">
+      <button id="settings-close"
+              class="cursor-pointer rounded border border-neutral-300 bg-sky-700 px-5 py-2 text-sm text-white transition hover:bg-sky-800">
+        Close
+      </button>
     </div>
   </div>
 </div>
 
-<div id="upload-modal" class="modal hidden">
-  <div class="modal-content upload-modal">
-    <h2>Upload Polygon</h2>
-    <p class="setting-description">Upload a GeoJSON file containing polygon geometries to analyze GRACE groundwater data within the polygon boundary.</p>
-    <hr>
+<div id="upload-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">
+  <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">
+    <h2 class="text-2xl font-bold text-neutral-900">Upload Polygon</h2>
+    <p class="mb-3 text-[13px] text-neutral-600">Upload a GeoJSON file containing polygon geometries to analyze GRACE
+      groundwater data within the polygon boundary.</p>
+    <hr class="my-4 border-t border-neutral-300"/>
 
-    <div id="upload-drop-zone" class="upload-drop-zone">
-      <calcite-icon icon="upload" scale="l"></calcite-icon>
-      <p>Drag and drop a GeoJSON file here</p>
-      <p class="setting-description">or</p>
-      <button id="upload-browse-button" class="upload-browse-button">Browse Files</button>
+    <div id="upload-drop-zone"
+         class="my-4 cursor-pointer rounded-lg border-2 border-dashed border-neutral-300 px-5 py-10 text-center transition hover:border-sky-700 hover:bg-sky-50 data-[drag=true]:border-sky-700 data-[drag=true]:bg-sky-50">
+      <span data-icon="cloud-arrow-up" class="mx-auto mb-2 block size-8 text-neutral-400" aria-hidden="true"></span>
+      <p class="my-1 text-neutral-600">Drag and drop a GeoJSON file here</p>
+      <p class="my-1 text-[13px] text-neutral-600">or</p>
+      <button id="upload-browse-button"
+              class="my-2 cursor-pointer rounded border border-sky-700 bg-white px-5 py-2 text-sm text-sky-700 transition hover:bg-sky-50">
+        Browse Files
+      </button>
       <input type="file" id="upload-file-input" accept=".geojson,.json" hidden>
-      <p class="setting-description upload-hint">.geojson or .json files accepted</p>
+      <p class="mt-2 text-xs text-neutral-400">.geojson or .json files accepted</p>
     </div>
 
-    <div id="upload-file-info" class="upload-file-info hidden">
+    <div id="upload-file-info"
+         class="my-3 flex hidden items-center justify-between rounded-md border border-sky-700 bg-sky-50 px-3.5 py-2.5 text-sm text-neutral-800">
       <span id="upload-file-name"></span>
-      <button id="upload-clear-file" class="upload-clear-button" title="Remove file">&times;</button>
+      <button id="upload-clear-file" title="Remove file"
+              class="cursor-pointer text-neutral-400 transition hover:text-red-600">
+        <span data-icon="x-mark" class="block size-5" aria-hidden="true"></span>
+      </button>
     </div>
 
-    <div id="upload-error" class="upload-error hidden"></div>
+    <div id="upload-error"
+         class="my-3 hidden rounded-md border border-red-600 bg-red-50 px-3.5 py-2.5 text-[13px] text-red-600"></div>
 
-    <div class="modal-buttons">
-      <button id="upload-cancel">Cancel</button>
-      <button id="upload-submit" disabled>Analyze</button>
+    <div class="mt-5 flex justify-end gap-2.5">
+      <button id="upload-cancel"
+              class="cursor-pointer rounded border border-neutral-300 bg-white px-5 py-2 text-sm text-neutral-800 transition hover:bg-neutral-100">
+        Cancel
+      </button>
+      <button id="upload-submit" disabled
+              class="cursor-pointer rounded border border-neutral-300 bg-sky-700 px-5 py-2 text-sm text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-neutral-300">
+        Analyze
+      </button>
     </div>
   </div>
 </div>

@@ -1,142 +1,14 @@
-:root {
-    --nav-height: 60px;
+@import "tailwindcss";
+
+@theme {
+    --font-sans: Arial, Helvetica, sans-serif;
 }
 
-body {
-    font-family: Arial, sans-serif;
-    margin: 0;
-    padding: 0;
-    background-color: #f4f4f4;
+[data-icon] > svg {
     height: 100%;
     width: 100%;
-    position: absolute;
 }
 
-.nav-bar {
-    width: 100%;
-    height: var(--nav-height);
-    display: flex;
-    align-items: center;
-    background-color: #00daff;
-}
-
-.nav-bar h1 {
-    margin: 0;
-    padding: 0 20px;
-    font-size: 24px;
-}
-
-.nav-bar .back-to-portal {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    margin-left: 16px;
-    color: #003a4d;
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.45);
-    transition: background 0.15s ease;
-}
-
-.nav-bar .back-to-portal:hover,
-.nav-bar .back-to-portal:focus-visible {
-    background: rgba(255, 255, 255, 0.75);
-    outline: none;
-}
-
-.nav-bar .back-to-portal-icon {
-    width: 18px;
-    height: 18px;
-    color: #1d4ed8;
-    flex-shrink: 0;
-}
-
-.nav-bar .nav-buttons {
-    display: flex;
-    gap: 10px;
-    /* margin-left: auto pushes nav-buttons + nav-auth as a right cluster. */
-    margin-left: auto;
-}
-
-.nav-bar .nav-auth {
-    margin: 0 20px;
-    display: flex;
-    align-items: center;
-}
-
-.nav-bar .icon-button {
-    background: rgba(255, 255, 255, 0.45);
-    border: 2px solid transparent;
-    cursor: pointer;
-    padding: 4px;
-    display: flex;
-    align-items: center;
-    border-radius: 50%;
-    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.nav-bar .icon-button:hover {
-    background: rgba(255, 255, 255, 0.65);
-}
-
-/* Regional vs. global buttons are a mutually-exclusive group: the active mode's
-   button appears pressed with a darker fill, an inset shadow, and a ring. */
-.nav-bar .icon-button.active {
-    background: rgba(0, 0, 0, 0.35);
-    border-color: rgba(255, 255, 255, 0.9);
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
-    color: #ffffff;
-}
-
-.nav-bar .icon-button.active calcite-icon {
-    color: #ffffff;
-}
-
-.body {
-    height: calc(100% - var(--nav-height));
-    width: 100%;
-    position: absolute;
-    top: var(--nav-height);
-    display: flex;
-    flex-direction: column;
-}
-
-arcgis-map {
-    flex: 1 1 auto;
-    width: 100%;
-    border-bottom: 2px solid black;
-}
-
-.chart-container {
-    flex: 0 0 32%;
-    width: 100%;
-}
-
-/* Global view mode: no chart, the map takes the extra space.
-   (The global progress/legend overlays style themselves with scoped <style>
-   blocks in index.html because view.ui.add() moves them into the arcgis-map
-   shadow DOM, out of reach of this stylesheet.) */
-.chart-container.hidden {
-    display: none;
-}
-
-.centered-message {
-    height: 100%;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 26px;
-    font-weight: bold;
-    text-align: center;
-}
-
-/* modebar is the plotly control buttons on the top right */
 .modebar-btn {
     padding: 6px !important;
 }
