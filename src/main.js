@@ -48,8 +48,22 @@ Plotly.register([Scatter]);
 
 hydrateIcons();  // heroicons
 
+// The mapped variables. All live in the same zarr store with identical
+// shape/chunking/fill handling, so every read and render path is parameterized
+// by variable name; the dropdown docked under the map legend switches which
+// one drives the map and chart. Variables are loaded lazily, so listing one
+// here before its arrays land in the store is fine — it shows a "not
+// available yet" notice when selected and starts working once the data exists.
+const VARIABLES = {
+  GWSa: {short: "GWS", longName: "Groundwater Storage Anomaly"},
+  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly"},
+  SMa: {short: "SM", longName: "Soil Moisture Anomaly"},
+  SWEa: {short: "SWE", longName: "Snow Water Equivalent Anomaly"},
+};
+
 // Configuration state
 const displayConfig = {
+  variable: "GWSa",          // which anomaly is displayed (see VARIABLES)
   showBorders: false,
   borderWidth: 0.5,
   colorPalette: "default",
@@ -125,12 +139,30 @@ displayConfig.showBorders = borderToggle.checked;
 const openArray = (name) => openZarrArray(zarrUrl, name);
 
 const coordsPromise = getOrFetchCoords({zarrUrl});
-const [gwsaNode, gwsaUncNode, timeNode] = await Promise.all([openArray("GWSa"), openArray("GWSa_unc"), openArray("time")]);
+const timeNode = await openArray("time");
 
-const GWSA_FILL = gwsaNode.attrs?._FillValue ?? -9999;
-const maskGwsaFill = ({data, shape, stride}) => {
+// Variable nodes are opened lazily and memoized: a variable listed in the
+// dropdown before its arrays exist in the store only errors when displayed.
+// A missing <var>_unc array is tolerated (unc: null -> no uncertainty band).
+const varNodePromises = {};
+const getVarNodes = (varName) => {
+  varNodePromises[varName] ??= Promise.all([
+    openArray(varName),
+    openArray(`${varName}_unc`).catch(() => null),
+  ])
+    .then(([value, unc]) => ({value, unc}))
+    .catch((err) => {
+      delete varNodePromises[varName]; // allow retry once the array exists
+      throw err;
+    });
+  return varNodePromises[varName];
+};
+
+// value arrays are int16 with a sentinel fill for missing months -> NaN
+const maskFill = (node, {data, shape, stride}) => {
+  const fill = node.attrs?._FillValue ?? -9999;
   const out = new Float32Array(data.length);
-  for (let i = 0; i < data.length; i++) out[i] = data[i] === GWSA_FILL ? NaN : data[i];
+  for (let i = 0; i < data.length; i++) out[i] = data[i] === fill ? NaN : data[i];
   return {data: out, shape, stride};
 };
 const timeIntegers = await get(timeNode, [null]);
@@ -223,17 +255,24 @@ const globalProgressLabel = document.getElementById("global-progress-label");
 const globalProgressFill = document.getElementById("global-progress-fill");
 // Shared color-ramp legend, used by both the regional and global views.
 const mapLegendDiv = document.getElementById("map-legend");
+const mapLegendTitle = document.getElementById("map-legend-title");
 const mapLegendBar = document.getElementById("map-legend-bar");
 const mapLegendMin = document.getElementById("map-legend-min");
 const mapLegendMax = document.getElementById("map-legend-max");
+// GWSa/TWSa dropdown, docked under the legend; switches both views' data.
+const variableSelectPanel = document.getElementById("variable-select-panel");
+const variableSelect = document.getElementById("variable-select");
+displayConfig.variable = variableSelect.value; // sync from the markup's `selected` option
 
 const globalView = {
   active: false,
   runSeq: 0,       // bumped on every enter/exit so stale async runs abandon
   renderer: null,
-  dataPromise: null,
-  data: null,      // {frames, nT, nLat, nLon} from the vis copy
-  stats: null      // {validTimeIndices, suggestedMax}
+  gridVar: null,   // which variable's frames the renderer grid currently holds
+  // per-variable loads: varName -> {dataPromise, data: {frames, nT, nLat, nLon},
+  // stats: {validTimeIndices, suggestedMax}}; each variable is fetched and
+  // cached independently the first time it is displayed globally
+  byVar: {}
 };
 
 // The regional (aquifer scale) and global buttons form a mutually-exclusive
@@ -253,6 +292,10 @@ setActiveViewButton("global"); // whole-world animation is the initial view
 // Route time-slider changes to whichever view is active (regional applyEdits
 // or global raster). A single watcher instead of one per analysis run.
 let timeStepHandler = null;
+// Set by a completed regional analysis: re-renders the map layer + chart from
+// the already-fetched data when the GWSa/TWSa toggle flips. Null while no
+// regional analysis is showing (the toggle then only updates displayConfig).
+let regionalVariableHandler = null;
 // Bumped whenever any analysis (regional or global) starts or the app resets,
 // so an in-flight regional run abandons before mutating shared UI state.
 let analysisRunSeq = 0;
@@ -271,11 +314,16 @@ const ensureSliderWatcher = () => {
   );
 };
 
-const configureTimeSlider = (dates) => {
+// keepCurrent preserves the slider position across a GWSa/TWSa toggle (the
+// whole point of toggling is comparing the two at the same month); it falls
+// back to the first date when the current one isn't in the new stop list.
+const configureTimeSlider = (dates, {keepCurrent = false} = {}) => {
+  const current = timeSlider.timeExtent?.start;
   timeSlider.mode = "instant";
   timeSlider.fullTimeExtent = {start: dates[0], end: dates[dates.length - 1]};
   timeSlider.stops = {dates};
-  timeSlider.timeExtent = {start: dates[0], end: dates[0]};
+  const start = keepCurrent && current && dates.some((d) => d.getTime() === current.getTime()) ? current : dates[0];
+  timeSlider.timeExtent = {start, end: start};
   timeSlider.labelsVisible = true;
 };
 
@@ -292,13 +340,22 @@ const updateMapLegend = () => {
   const min = stops[0].value;
   const max = stops[stops.length - 1].value;
   const gradient = stops.map((s) => `${s.color} ${(((s.value - min) / (max - min)) * 100).toFixed(1)}%`).join(", ");
+  mapLegendTitle.textContent = `${VARIABLES[displayConfig.variable].longName} (cm)`;
   mapLegendBar.style.background = `linear-gradient(to right, ${gradient})`;
   mapLegendMin.textContent = `${min} cm`;
   mapLegendMax.textContent = `${max} cm`;
 };
 
-const setGlobalGrid = () => {
-  globalView.renderer.setGrid({...globalView.data, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
+const setGlobalGrid = (varName) => {
+  const entry = globalView.byVar[varName];
+  globalView.renderer.setGrid({...entry.data, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
+  globalView.gridVar = varName;
+};
+
+// Shown in the chart area when a selected variable can't be loaded — most
+// likely one listed in the dropdown ahead of its arrays landing in the store.
+const showVariableUnavailable = (varName) => {
+  timeseriesPlotDiv.innerHTML = `<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`;
 };
 
 // While chunks stream in, preview the most recent month that already has data
@@ -320,56 +377,64 @@ const pickPreviewTimeStep = ({frames, nT, nLat, nLon}) => {
   return nT - 1;
 };
 
-const ensureGlobalData = () => {
-  if (!globalView.dataPromise) {
-    globalView.dataPromise = (async () => {
+const ensureGlobalData = (varName) => {
+  const entry = (globalView.byVar[varName] ??= {});
+  if (!entry.dataPromise) {
+    entry.dataPromise = (async () => {
       const {lat, lon} = await getOrFetchCoords({zarrUrl});
       globalView.cellSize = lat.data[1] - lat.data[0];
       globalView.lat0 = lat.data[0];
       globalView.lon0 = lon.data[0];
       globalView.latEdgeMin = lat.data[0] - globalView.cellSize / 2;
 
-      let previewReady = false;
       let lastPreviewAt = 0;
       // dedicated node: the global loader wants opaque CORS errors confirmed
       // twice before accepting a chunk as missing (it caches what it reads)
-      const globalGwsaNode = await openZarrArray(zarrUrl, "GWSa", {confirmOpaqueErrors: true});
+      const node = await openZarrArray(zarrUrl, varName, {confirmOpaqueErrors: true});
       const data = await loadGlobalFrames({
-        gwsaNode: globalGwsaNode,
+        node,
+        varName,
         zarrUrl,
         onProgress: (fraction, partial) => {
-          if (!globalView.active) return;
+          // the load keeps running (and caches) if the user toggles away; it
+          // just stops painting previews for a variable no longer displayed
+          if (!globalView.active || displayConfig.variable !== varName) return;
           updateGlobalProgress(fraction);
           if (!partial || fraction >= 1) return;
           const now = performance.now();
           if (now - lastPreviewAt < 500) return;
           lastPreviewAt = now;
-          if (!previewReady) {
+          if (globalView.gridVar !== varName) {
             globalView.renderer.setStops(generateStops());
             globalView.renderer.setGrid({...partial, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
-            previewReady = true;
+            globalView.gridVar = varName;
           }
           globalView.renderer.drawFrame(pickPreviewTimeStep(partial));
         }
       });
-      globalView.stats = computeFrameStats(data);
-      globalView.data = data;
-      console.info(`Global view ready (${data.fromCache ? "from cache" : "from network"}): ${globalView.stats.validTimeIndices.length}/${data.nT} months with data, dynamic color scale ±${globalView.stats.suggestedMax} cm`);
+      entry.stats = computeFrameStats(data);
+      entry.data = data;
+      console.info(`Global ${varName} ready (${data.fromCache ? "from cache" : "from network"}): ${entry.stats.validTimeIndices.length}/${data.nT} months with data, dynamic color scale ±${entry.stats.suggestedMax} cm`);
     })().catch((err) => {
-      globalView.dataPromise = null; // allow retry after a failure
+      entry.dataPromise = null; // allow retry after a failure
       throw err;
     });
   }
-  return globalView.dataPromise;
+  return entry.dataPromise;
 };
 
-const analyzeGlobalView = async () => {
+// keepView: a GWSa/TWSa toggle inside the global view keeps the user's camera
+// and slider position; entering global view from anywhere else flies home to
+// the whole world and rewinds to the first populated month.
+const analyzeGlobalView = async ({keepView = false} = {}) => {
   const runId = ++globalView.runSeq;
   analysisRunSeq++; // abandon any in-flight regional analysis
   globalView.active = true;
+  const varName = displayConfig.variable;
   setActiveViewButton("global");
 
   // ---- clear any regional analysis state
+  regionalVariableHandler = null;
   sketchTool.layer.removeAll();
   // The whole-world raster covers the map; the aquifer outlines would only
   // clutter it, so hide them here (exitGlobalView restores them).
@@ -381,7 +446,7 @@ const analyzeGlobalView = async () => {
   timeseriesPlotDiv.innerHTML = "";
   timeseriesPlotDiv.classList.add("hidden");
 
-  const zoomPromise = arcgisMap.view.goTo({center: [0, 20], zoom: 4}).catch(() => {
+  const zoomPromise = keepView ? Promise.resolve() : arcgisMap.view.goTo({center: [0, 20], zoom: 4}).catch(() => {
   });
 
   if (!globalView.renderer) globalView.renderer = createGlobalRenderer({title: "GRACE Anomalies (Global)"});
@@ -389,40 +454,49 @@ const analyzeGlobalView = async () => {
     arcgisMap.map.layers.add(globalView.renderer.layer, 0);
   }
 
-  if (!globalView.data) {
+  if (!globalView.byVar[varName]?.data) {
     globalProgressDiv.classList.remove("hidden");
     updateGlobalProgress(0);
   }
   try {
-    await ensureGlobalData();
+    await ensureGlobalData(varName);
   } catch (err) {
-    console.error("Failed to load the global dataset", err);
+    console.error(`Failed to load the global ${varName} dataset`, err);
     if (globalView.runSeq === runId && globalView.active) {
-      globalProgressLabel.textContent = "Failed to load global data. Press the globe to retry.";
+      globalProgressLabel.textContent = `Failed to load ${VARIABLES[varName].longName}. It may not be available yet — choose another layer or press the globe to retry.`;
       globalProgressFill.style.width = "0%";
+      // don't leave another variable's raster on screen looking like this one
+      if (globalView.gridVar !== varName) {
+        globalView.renderer.clear();
+        globalView.gridVar = null;
+        mapLegendDiv.classList.add("hidden");
+      }
     }
     return;
   }
   if (globalView.runSeq !== runId || !globalView.active) return;
   globalProgressDiv.classList.add("hidden");
 
+  const {stats} = globalView.byVar[varName];
   // Fit the color scale to the 95th percentile of |values| across the whole
   // dataset; a plain max would let a few extreme cells wash out the ramp.
-  displayConfig.maxValue = globalView.stats.suggestedMax;
-  setGlobalGrid();
+  displayConfig.maxValue = stats.suggestedMax;
+  setGlobalGrid(varName);
   globalView.renderer.setStops(generateStops());
   globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
   globalView.renderer.layer.opacity = displayConfig.opacity;
   updateMapLegend();
   mapLegendDiv.classList.remove("hidden");
 
-  const validDates = globalView.stats.validTimeIndices.map((t) => timeDates[t]);
+  const validDates = stats.validTimeIndices.map((t) => timeDates[t]);
   timeStepHandler = (idx) => globalView.renderer.drawFrame(idx);
   ensureSliderWatcher();
-  configureTimeSlider(validDates.length ? validDates : timeDates);
+  configureTimeSlider(validDates.length ? validDates : timeDates, {keepCurrent: keepView});
   timeSlider.playRate = 250;
   timeSlider.loop = true; // loop when the user presses play
-  globalView.renderer.drawFrame(globalView.stats.validTimeIndices[0] ?? 0);
+  const start = timeSlider.timeExtent?.start;
+  const startIdx = start ? timeDates.findIndex((d) => d.getTime() === start.getTime()) : -1;
+  globalView.renderer.drawFrame(startIdx >= 0 ? startIdx : (stats.validTimeIndices[0] ?? 0));
 
   await zoomPromise;
   // Leave the animation paused on the first frame; the user starts it with the
@@ -452,6 +526,7 @@ const exitGlobalView = () => {
 const main = async ({polygon, zoomPromise}) => {
   exitGlobalView();
   const runId = ++analysisRunSeq;
+  regionalVariableHandler = null; // reinstalled once this run's data is ready
   const {lat, lon} = await coordsPromise;
   await arcgisMap.map.when();
   await arcgisMap.view.when();
@@ -465,10 +540,24 @@ const main = async ({polygon, zoomPromise}) => {
   const yStop = lat.data.indexOf(filteredLats[filteredLats.length - 1]) + 1;
   const xStart = lon.data.indexOf(filteredLons[0]);
   const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
-  // Fetch values and uncertainties, each parameter from its own dedicated array
+  // Reads are lazy per variable: the displayed one starts downloading now
+  // (overlapping the geometry work below); the others are fetched only when
+  // first selected, then memoized so toggling back is instant.
   const readWindow = [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}];
-  let gwsaValues = get(gwsaNode, readWindow);
-  let gwsaUncValues = get(gwsaUncNode, readWindow);
+  const varReads = {};
+  const startVarRead = (varName) => {
+    varReads[varName] ??= getVarNodes(varName)
+      .then((nodes) => Promise.all([
+        get(nodes.value, readWindow).then((raw) => maskFill(nodes.value, raw)), // int16 sentinel -> NaN
+        nodes.unc ? get(nodes.unc, readWindow) : null,                          // float, already NaN-filled
+      ]))
+      .catch((err) => {
+        delete varReads[varName]; // allow retry (e.g. once the array is added)
+        throw err;
+      });
+    return varReads[varName];
+  };
+  startVarRead(displayConfig.variable);
 
   // ---- Find the overlapping areas of the cells with the polygon ----
   if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
@@ -484,11 +573,6 @@ const main = async ({polygon, zoomPromise}) => {
       intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
     }
   }
-
-  // ---- Resolve zarr reads and compute averages
-  gwsaValues = maskGwsaFill(await gwsaValues); // int16 sentinel -> NaN
-  gwsaUncValues = await gwsaUncValues;         // float16, already NaN-filled
-  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
 
   // Get indices of cells that pass the display threshold (frac >= 0.35)
   const displayThreshold = 0.35;
@@ -513,9 +597,6 @@ const main = async ({polygon, zoomPromise}) => {
     }
     return max;
   };
-  // Color scale is driven by the mapped variable (GWSa)
-  const maxAbs = findMaxAbsForValidCells(gwsaValues.data, gwsaValues.shape, gwsaValues.stride, validCellIndices);
-  displayConfig.maxValue = Math.ceil(maxAbs) || 30; // round up, fallback to 30 if no valid cells
 
   const weightedMeanTimeSeries = (data, shape, stride, cells, indices) => {
     const [T, , nLon] = shape;
@@ -536,94 +617,111 @@ const main = async ({polygon, zoomPromise}) => {
     }
     return result;
   };
-  const gwsaMeanTimeSeries = weightedMeanTimeSeries(gwsaValues.data, gwsaValues.shape, gwsaValues.stride, intersectingCells, validCellIndices);
-  const gwsaUncMeanTimeSeries = weightedMeanTimeSeries(gwsaUncValues.data, gwsaUncValues.shape, gwsaUncValues.stride, intersectingCells, validCellIndices);
+  // ---- Per-variable derived data, computed once that variable's read resolves
+  const varData = {};
+  const loadVarData = async (varName) => {
+    if (varData[varName]) return varData[varName];
+    const [values, unc] = await startVarRead(varName);
+    const meanSeries = weightedMeanTimeSeries(values.data, values.shape, values.stride, intersectingCells, validCellIndices);
+    // Time steps where the selection actually has data. GRACE has missing months
+    // plus the GRACE/GRACE-FO gap; the slider only stops on populated dates.
+    const validTimeIndices = [];
+    for (let t = 0; t < timeDates.length; t++) {
+      if (Number.isFinite(meanSeries[t])) validTimeIndices.push(t);
+    }
+    const validTimeDates = validTimeIndices.map((t) => timeDates[t]);
+    varData[varName] = {
+      values,
+      meanSeries,
+      uncMeanSeries: unc ? weightedMeanTimeSeries(unc.data, unc.shape, unc.stride, intersectingCells, validCellIndices) : null,
+      // Color scale bound for this variable's displayed cells
+      maxValue: Math.ceil(findMaxAbsForValidCells(values.data, values.shape, values.stride, validCellIndices)) || 30,
+      firstValidStep: validTimeIndices.length ? validTimeIndices[0] : 0,
+      sliderDates: validTimeDates.length ? validTimeDates : timeDates,
+    };
+    return varData[varName];
+  };
 
-  // Time steps where the selection actually has data. GRACE has missing months
-  // plus the GRACE/GRACE-FO gap; the slider only stops on populated dates.
-  const validTimeIndices = [];
-  for (let t = 0; t < timeDates.length; t++) {
-    if (Number.isFinite(gwsaMeanTimeSeries[t])) validTimeIndices.push(t);
-  }
-  const validTimeDates = validTimeIndices.map((t) => timeDates[t]);
-  const firstValidStep = validTimeIndices.length ? validTimeIndices[0] : 0;
-  const sliderDates = validTimeDates.length ? validTimeDates : timeDates;
-
-  // Generate the timeseries plot
-  timeseriesPlotDiv.innerHTML = "";
-  Plotly.newPlot(
-    timeseriesPlotDiv,
-    [
-      // GWS uncertainty band and line
-      createUncertaintyBand({x: timeDates, yArray: gwsaMeanTimeSeries, uncertaintyArray: gwsaUncMeanTimeSeries, color: "rgba(28,110,236,0.25)", name: "GWS"}),
-      createLinePlot({x: timeDates, y: gwsaMeanTimeSeries, color: "#1c6eec", name: "GWS", uncertainty: gwsaUncMeanTimeSeries}),
-    ],
-    {
-      title: {text: "Groundwater Storage Anomaly Time Series and Uncertainty", font: {size: 14, color: "#333"}, y: 0.97, yanchor: "top"},
-      xaxis: {title: {text: "Time", font: {size: 12, color: "#333"}}, automargin: true},
-      yaxis: {title: {text: "Liquid Water Equivalent (cm)", font: {size: 12, color: "#333"}}, automargin: true},
-      showlegend: false,
-      dragmode: false,  // disable click-and-drag zoom/pan on the plot area
-    },
-    {
-      responsive: true,
-      toImageButtonOptions: {
-        format: "png",
-        filename: "grace_anomaly_timeseries",
-        height: 600,
-        width: 1200,
-        scale: 2
+  // Generate the timeseries plot for the displayed variable (re-run on toggle)
+  const plotTimeseries = () => {
+    const varName = displayConfig.variable;
+    const {short, longName} = VARIABLES[varName];
+    const d = varData[varName];
+    timeseriesPlotDiv.innerHTML = "";
+    // uncertainty band (when the store has a <var>_unc array) and line
+    const traces = [];
+    if (d.uncMeanSeries) traces.push(createUncertaintyBand({x: timeDates, yArray: d.meanSeries, uncertaintyArray: d.uncMeanSeries, color: "rgba(28,110,236,0.25)", name: short}));
+    traces.push(createLinePlot({x: timeDates, y: d.meanSeries, color: "#1c6eec", name: short, uncertainty: d.uncMeanSeries}));
+    Plotly.newPlot(
+      timeseriesPlotDiv,
+      traces,
+      {
+        title: {text: `${longName} Time Series${d.uncMeanSeries ? " and Uncertainty" : ""}`, font: {size: 14, color: "#333"}, y: 0.97, yanchor: "top"},
+        xaxis: {title: {text: "Time", font: {size: 12, color: "#333"}}, automargin: true},
+        yaxis: {title: {text: "Liquid Water Equivalent (cm)", font: {size: 12, color: "#333"}}, automargin: true},
+        showlegend: false,
+        dragmode: false,  // disable click-and-drag zoom/pan on the plot area
       },
-      modeBarButtonsToAdd: [
-        {
-          name: "Download CSV",
-          icon: Plotly.Icons.disk,
-          click: function (gd) {
-            // Line traces carry the center value (y) and per-point uncertainty
-            // (customdata); upper/lower are derived from those.
-            const lineTraces = gd.data.filter(t => t.mode === "lines");
+      {
+        responsive: true,
+        toImageButtonOptions: {
+          format: "png",
+          filename: `grace_${varName.toLowerCase()}_timeseries`,
+          height: 600,
+          width: 1200,
+          scale: 2
+        },
+        modeBarButtonsToAdd: [
+          {
+            name: "Download CSV",
+            icon: Plotly.Icons.disk,
+            click: function (gd) {
+              // Line traces carry the center value (y) and per-point uncertainty
+              // (customdata); upper/lower are derived from those.
+              const lineTraces = gd.data.filter(t => t.mode === "lines");
 
-            const dates = lineTraces[0]?.x || [];
+              const dates = lineTraces[0]?.x || [];
 
-            // Build headers: Date, then for each series: value, upper, lower
-            const headers = ["Date"];
-            lineTraces.forEach(t => {
-              headers.push(t.name, `${t.name}_upper`, `${t.name}_lower`);
-            });
-
-            // Build rows
-            const rows = dates.map((date, i) => {
-              const dateStr = new Date(date).toISOString().split("T")[0];
-              const values = [dateStr];
-
-              lineTraces.forEach((lineTrace) => {
-                const center = lineTrace.y[i];
-                const unc = lineTrace.customdata?.[i];
-                const centerVal = Number.isFinite(center) ? center : "";
-                const hasBand = centerVal !== "" && Number.isFinite(unc);
-                const upperVal = hasBand ? center + unc : "";
-                const lowerVal = hasBand ? center - unc : "";
-                values.push(centerVal, upperVal, lowerVal);
+              // Build headers: Date, then for each series: value, upper, lower
+              const headers = ["Date"];
+              lineTraces.forEach(t => {
+                headers.push(t.name, `${t.name}_upper`, `${t.name}_lower`);
               });
 
-              return values.join(",");
-            });
+              // Build rows
+              const rows = dates.map((date, i) => {
+                const dateStr = new Date(date).toISOString().split("T")[0];
+                const values = [dateStr];
 
-            const csv = [headers.join(","), ...rows].join("\n");
-            const blob = new Blob([csv], {type: "text/csv"});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "grace_anomaly_data.csv";
-            a.click();
-            URL.revokeObjectURL(url);
+                lineTraces.forEach((lineTrace) => {
+                  const center = lineTrace.y[i];
+                  const unc = lineTrace.customdata?.[i];
+                  const centerVal = Number.isFinite(center) ? center : "";
+                  const hasBand = centerVal !== "" && Number.isFinite(unc);
+                  const upperVal = hasBand ? center + unc : "";
+                  const lowerVal = hasBand ? center - unc : "";
+                  values.push(centerVal, upperVal, lowerVal);
+                });
+
+                return values.join(",");
+              });
+
+              const csv = [headers.join(","), ...rows].join("\n");
+              const blob = new Blob([csv], {type: "text/csv"});
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `grace_${varName.toLowerCase()}_data.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }
           }
-        }
-      ]
-    }
-  );
+        ]
+      }
+    );
+  };
 
-  // ---- Create the cell source for the mapped variable (GWSa) ----
+  // ---- Create the cell source; `anomaly` carries whichever variable is displayed ----
   const cellSource = intersectingCells
     .map(({lon, lat, frac, cell, intersects}, idx) => {
       if (!intersects || frac < displayThreshold) return null;
@@ -635,7 +733,7 @@ const main = async ({polygon, zoomPromise}) => {
           lon,
           lat,
           frac,
-          gwsaValue: 0
+          anomaly: 0
         }
       });
     })
@@ -647,7 +745,7 @@ const main = async ({polygon, zoomPromise}) => {
     {name: "lon", type: "double"},
     {name: "lat", type: "double"},
     {name: "frac", type: "double"},
-    {name: "gwsaValue", type: "double"}
+    {name: "anomaly", type: "double"}
   ];
 
   // Create renderer for a given field using current display config
@@ -672,14 +770,14 @@ const main = async ({polygon, zoomPromise}) => {
     };
   };
 
-  const gwsaLayer = new FeatureLayer({
+  const anomalyLayer = new FeatureLayer({
     title: "GRACE Anomalies",
     source: cellSource,
     objectIdField: "oid",
     fields: cellFields,
     geometryType: "polygon",
     spatialReference: SpatialReference.WGS84,
-    renderer: createRenderer("gwsaValue"),
+    renderer: createRenderer("anomaly"),
     opacity: displayConfig.opacity,
     visible: true
   });
@@ -689,9 +787,7 @@ const main = async ({polygon, zoomPromise}) => {
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
   await zoomPromise;
   if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
-  arcgisMap.map.layers.add(gwsaLayer, 0);
-  updateMapLegend();
-  mapLegendDiv.classList.remove("hidden");
+  arcgisMap.map.layers.add(anomalyLayer, 0);
 
   // ---- precompute lookup from feature idx -> oid ----
   const oids = cellSource.map(g => g.attributes.oid);
@@ -702,23 +798,25 @@ const main = async ({polygon, zoomPromise}) => {
 
   const updateMapToTimeStep = (timeStep) => {
     editsInFlight = editsInFlight.then(async () => {
-      const nLon = gwsaValues.shape[2];
-      const nLat = gwsaValues.shape[1];
+      const {values} = varData[displayConfig.variable] ?? {};
+      if (!values) return; // displayed variable failed to load
+      const nLon = values.shape[2];
+      const nLat = values.shape[1];
       const base = timeStep * nLat * nLon;
 
-      // Build update array with the groundwater value for each cell
+      // Build update array with the displayed variable's value for each cell
       const updateFeatures = new Array(cellSource.length);
       for (let i = 0; i < cellSource.length; i++) {
         const idx = idxs[i];
         updateFeatures[i] = new Graphic({
           attributes: {
             oid: oids[i],
-            gwsaValue: gwsaValues.data[base + idx]
+            anomaly: values.data[base + idx]
           }
         });
       }
 
-      await gwsaLayer.applyEdits({updateFeatures});
+      await anomalyLayer.applyEdits({updateFeatures});
 
       Plotly
         .relayout(
@@ -741,15 +839,50 @@ const main = async ({polygon, zoomPromise}) => {
   // update the timeSlider web component — stops only on dates that have data
   timeStepHandler = updateMapToTimeStep;
   ensureSliderWatcher();
-  configureTimeSlider(sliderDates);
+
+  // Render the displayed variable: load (or reuse) its window, then restyle
+  // the layer, chart, legend, and slider. Used for both the initial draw and
+  // the dropdown toggle; keepSlider preserves the slider position across a
+  // toggle so the two variables can be compared at the same month.
+  const renderVariable = async ({keepSlider}) => {
+    const varName = displayConfig.variable;
+    if (!varData[varName]) {
+      timeseriesPlotDiv.innerHTML = `<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">Loading ${VARIABLES[varName].longName}&hellip;</div>`;
+    }
+    let d;
+    try {
+      d = await loadVarData(varName);
+    } catch (err) {
+      console.error(`Failed to load ${varName} for this region`, err);
+      if (runId !== analysisRunSeq || displayConfig.variable !== varName) return;
+      anomalyLayer.visible = false;
+      mapLegendDiv.classList.add("hidden");
+      showVariableUnavailable(varName);
+      return;
+    }
+    if (runId !== analysisRunSeq || displayConfig.variable !== varName) return; // stale toggle or analysis
+    displayConfig.maxValue = d.maxValue;
+    anomalyLayer.renderer = createRenderer("anomaly");
+    anomalyLayer.visible = true;
+    updateMapLegend();
+    mapLegendDiv.classList.remove("hidden");
+    plotTimeseries();
+    configureTimeSlider(d.sliderDates, {keepCurrent: keepSlider});
+    const start = timeSlider.timeExtent?.start;
+    const idx = start ? timeDates.findIndex((dd) => dd.getTime() === start.getTime()) : -1;
+    updateMapToTimeStep(idx >= 0 ? idx : d.firstValidStep);
+  };
+
+  regionalVariableHandler = () => renderVariable({keepSlider: true});
 
   // initial draw
-  updateMapToTimeStep(firstValidStep);
+  await renderVariable({keepSlider: false});
 }
 
 const resetLayers = () => {
   exitGlobalView();
   analysisRunSeq++; // abandon any in-flight regional analysis
+  regionalVariableHandler = null;
   sketchTool.layer.removeAll();
   boundaryLayer.visible = true;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
@@ -785,16 +918,27 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   boundaryLayer.load();
 
   // dock the overlays inside the map UI, adding them to each corner in stack
-  // order: top-right holds the drawing tools, then the load-progress bar, then
-  // the shared color-ramp legend; the compact time slider sits bottom-left.
+  // order: top-right holds the drawing tools, then the load-progress bar, the
+  // shared color-ramp legend, and the GWSa/TWSa dropdown beneath it; the
+  // compact time slider sits bottom-left.
   arcgisMap.view.ui.add(sketchTool, "top-right");
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
+  arcgisMap.view.ui.add(variableSelectPanel, "top-right");
   arcgisMap.view.ui.add(timeSlider, "bottom-left");
 
   document
     .querySelector("#global-view-button")
     .addEventListener("click", () => analyzeGlobalView());
+
+  // GWSa/TWSa dropdown: whichever view is active re-renders itself from the
+  // newly selected variable.
+  variableSelect.addEventListener("change", () => {
+    displayConfig.variable = variableSelect.value;
+    if (globalView.active) analyzeGlobalView({keepView: true});
+    else regionalVariableHandler?.();
+    // neither view active (instructions showing): the next analysis picks it up
+  });
 
   // Global whole-world animation is the default view; enter it now that the map
   // is ready so the loading screen shows and the world fills in on first paint.
@@ -854,7 +998,7 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
   // from the current display config, and refresh the shared legend.
   const updateAnomalyLayerAppearance = () => {
     // Global raster: restyle from the same stops, opacity, and cell boundaries
-    if (globalView.active && globalView.data) {
+    if (globalView.active && globalView.byVar[displayConfig.variable]?.data) {
       globalView.renderer.layer.opacity = displayConfig.opacity;
       globalView.renderer.setStops(generateStops());
       globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});

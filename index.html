@@ -20,7 +20,7 @@
   </a>
 
   <h1 class="app-title">
-    <span class="hide-on-small-only">GRACE Regional Groundwater Analyst</span>
+    <span class="hide-on-small-only">GRACE Groundwater Anomalies</span>
     <span class="show-on-small-only">GRACE</span>
   </h1>
 
@@ -142,13 +142,49 @@
           margin-top: 2px;
       }
   </style>
-  <div class="map-legend-title">Liquid Water Equivalent (cm)</div>
+  <div id="map-legend-title" class="map-legend-title">Liquid Water Equivalent (cm)</div>
   <div id="map-legend-bar" class="map-legend-bar"></div>
   <div class="map-legend-labels">
     <span id="map-legend-min"></span>
     <span>0</span>
     <span id="map-legend-max"></span>
   </div>
+</div>
+<div id="variable-select-panel" class="variable-select-panel absolute">
+  <style>
+      .variable-select-panel {
+          width: 230px;
+          background: rgba(255, 255, 255, 0.92);
+          border-radius: 4px;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          padding: 8px 12px;
+          font-size: 12px;
+          font-family: Arial, sans-serif;
+      }
+
+      .variable-select-panel label {
+          display: block;
+          font-weight: bold;
+          margin-bottom: 4px;
+      }
+
+      .variable-select-panel select {
+          width: 100%;
+          font: inherit;
+          padding: 4px 6px;
+          border: 1px solid #999;
+          border-radius: 2px;
+          background: #fff;
+          cursor: pointer;
+      }
+  </style>
+  <label for="variable-select">Displayed Layer</label>
+  <select id="variable-select">
+    <option value="GWSa" selected>Groundwater Storage Anomaly (GWSa)</option>
+    <option value="TWSa">Total Water Storage Anomaly (TWSa)</option>
+    <option value="SMa">Soil Moisture Anomaly (SMa)</option>
+    <option value="SWEa">Snow Water Equivalent Anomaly (SWEa)</option>
+  </select>
 </div>
 
 <div id="settings-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">

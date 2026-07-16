@@ -14,15 +14,15 @@ const FETCH_RETRIES = 6;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function loadGlobalFrames({gwsaNode, zarrUrl, onProgress}) {
-  const [nT, nLat, nLon] = gwsaNode.shape;
-  // GWSa is int16 with a sentinel fill for missing months; convert it to NaN as
-  // chunks are unpacked so the Float32 frame buffer carries real gaps, not the
-  // raw integer sentinel. (GWSa_unc/coords are float arrays filled with NaN.)
-  const fill = gwsaNode.attrs?._FillValue ?? -32768;
+export async function loadGlobalFrames({node, varName, zarrUrl, onProgress}) {
+  const [nT, nLat, nLon] = node.shape;
+  // GWSa/TWSa are int16 with a sentinel fill for missing months; convert it to
+  // NaN as chunks are unpacked so the Float32 frame buffer carries real gaps,
+  // not the raw integer sentinel. (The _unc/coord arrays are float, NaN-filled.)
+  const fill = node.attrs?._FillValue ?? -32768;
   // "nan" marks the buffer as fill-masked; bumping it invalidates any pre-mask
   // cache that still has the raw int16 sentinel baked in.
-  const cacheKey = `global|${zarrUrl}|GWSa|f32nan|${nT}x${nLat}x${nLon}`;
+  const cacheKey = `global|${zarrUrl}|${varName}|f32nan|${nT}x${nLat}x${nLon}`;
 
   try {
     const cached = await idbGet(cacheKey);
@@ -38,7 +38,7 @@ export async function loadGlobalFrames({gwsaNode, zarrUrl, onProgress}) {
   const frames = new Float32Array(nT * nLat * nLon).fill(NaN);
   const frameSize = nLat * nLon;
 
-  const [, chunkY, chunkX] = gwsaNode.chunks;
+  const [, chunkY, chunkX] = node.chunks;
   const tasks = [];
   for (let y0 = 0; y0 < nLat; y0 += chunkY) {
     for (let x0 = 0; x0 < nLon; x0 += chunkX) {
@@ -82,7 +82,7 @@ export async function loadGlobalFrames({gwsaNode, zarrUrl, onProgress}) {
       const [y0, y1, x0, x1] = task;
       let window;
       try {
-        window = await get(gwsaNode, [null, {start: y0, stop: y1}, {start: x0, stop: x1}]);
+        window = await get(node, [null, {start: y0, stop: y1}, {start: x0, stop: x1}]);
       } catch (err) {
         if (err?.opaqueError) {
           task.notBefore = Date.now() + 1500;
@@ -127,7 +127,7 @@ export async function loadGlobalFrames({gwsaNode, zarrUrl, onProgress}) {
   // this log means chunks were misclassified as missing (e.g. sustained
   // throttling hiding real chunks behind CORS errors) and the load should be
   // retried after a reset.
-  console.info(`Global GWSa load complete: ${dataChunks}/${totalTasks} chunks contained data`);
+  console.info(`Global ${varName} load complete: ${dataChunks}/${totalTasks} chunks contained data`);
 
   if (dataChunks >= totalTasks * 0.2) {
     try {
