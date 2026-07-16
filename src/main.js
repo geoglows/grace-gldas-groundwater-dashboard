@@ -240,7 +240,7 @@ const globalView = {
 // group: whichever mode is active shows its button pressed. exitGlobalView()
 // and analyzeGlobalView() are the single choke points for the two modes, so the
 // indicator is flipped from there. aria-pressed is the only state carrier —
-// Tailwind's aria-pressed: variant styles the pressed button off it.
+// the .icon-btn[aria-pressed="true"] rule in style.css styles the pressed button.
 const regionalViewButton = document.querySelector("#refresh-layers");
 const globalViewButton = document.querySelector("#global-view-button");
 const setActiveViewButton = (mode) => {

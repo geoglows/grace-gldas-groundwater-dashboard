@@ -4,6 +4,10 @@
     --font-sans: Arial, Helvetica, sans-serif;
 }
 
+:root {
+    --nav-height: 70px;
+}
+
 [data-icon] > svg {
     height: 100%;
     width: 100%;
@@ -16,4 +20,124 @@
 .modebar-btn svg {
     width: 24px !important;
     height: 24px !important;
+}
+
+/* ------------------------------------------------------------------ *
+ * Nav bar. Mirrors rfs-v2-hydroviewer/src/css/main.css so the two apps
+ * present the same header when served together under apps.geoglows.
+ * ------------------------------------------------------------------ */
+.nav-bar-wrapper {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 0 25px;
+    border-bottom: 1px solid #e9ecef;
+    height: var(--nav-height);
+    background-color: #81d4fa;
+}
+
+.nav-bar-wrapper .back-to-portal {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    padding: 6px;
+    transition: background 0.15s ease;
+}
+
+.nav-bar-wrapper .back-to-portal:hover,
+.nav-bar-wrapper .back-to-portal:focus-visible {
+    background: rgba(255, 255, 255, 0.6);
+    outline: none;
+}
+
+/* The source image is 473x80. Constraining the width and leaving both
+   dimensions `auto` lets the intrinsic ratio drive the height; pinning a
+   height instead would let max-width squash the logo horizontally. */
+.nav-bar-wrapper .back-to-portal-logo {
+    max-width: 150px;
+    width: auto;
+    height: auto;
+    display: block;
+}
+
+.nav-bar-wrapper .app-title {
+    margin-left: 8px;
+    padding-left: 8px;
+    font-size: 2rem;
+    font-weight: bolder;
+    color: #1e293b;
+    /* This title is long enough to reach the nav buttons on mid-width screens,
+       so it ellipsizes rather than pushing them off the bar. */
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.nav-bar-wrapper .nav-buttons {
+    margin-left: auto;
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+}
+
+.nav-bar-wrapper .nav-auth {
+    margin-left: 12px;
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+}
+
+/* Responsive visibility helpers. `.hide-on-small-only` shows by default and is
+   hidden below the breakpoint; `.show-on-small-only` is its inverse. Using
+   `revert` restores each element's own default display (inline for a span,
+   block for a div) instead of forcing one value. */
+.show-on-small-only {
+    display: none;
+}
+
+@media (max-width: 800px) {
+    .nav-bar-wrapper {
+        padding: 0 13px;
+    }
+
+    .hide-on-small-only {
+        display: none;
+    }
+
+    .show-on-small-only {
+        display: revert;
+    }
+}
+
+@layer components {
+    /* Square, icon-only button (nav bar) */
+    .icon-btn {
+        @apply inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md
+        text-slate-700 transition hover:bg-black/10;
+    }
+
+    /* The global/aquifer view buttons are a mutually exclusive toggle group —
+       aria-pressed is the only state carrier (see main.js setActiveViewButton). */
+    .icon-btn[aria-pressed="true"],
+    .icon-btn[aria-pressed="true"]:hover {
+        @apply bg-slate-800 text-white;
+    }
+
+    .tooltip {
+        @apply relative;
+    }
+
+    .tooltip[data-tooltip]::after {
+        content: attr(data-tooltip);
+        @apply pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-50 -translate-x-1/2
+        scale-95 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs font-normal text-white
+        opacity-0 shadow-md transition;
+    }
+
+    .tooltip[data-tooltip]:hover::after {
+        @apply scale-100 opacity-100;
+    }
 }

@@ -14,39 +14,38 @@
   <script type="module" src="/src/main.js" defer></script>
 </head>
 <body class="flex h-full flex-col overflow-hidden bg-neutral-100 font-sans">
-<header class="flex h-[70px] w-full shrink-0 items-center gap-4 bg-[#81d4fa] px-4 shadow-md">
-  <a href="/" title="GEOGloWS Portal" aria-label="GEOGloWS Portal"
-     class="shrink-0 rounded focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-black/60">
-    <img src="/geoglows-logo-nav.png" alt="GEOGloWS" class="h-10 w-auto" style="max-width: 150px"/>
+<header class="nav-bar-wrapper">
+  <a class="back-to-portal tooltip" href="/" data-tooltip="GEOGloWS Portal" aria-label="GEOGloWS Portal">
+    <img class="back-to-portal-logo" src="/geoglows-logo-nav.png" alt="GEOGloWS" width="473" height="80"/>
   </a>
 
-  <h1 class="min-w-0 truncate text-xl font-bold text-black md:text-2xl">GRACE Regional Groundwater Analyst</h1>
+  <h1 class="app-title">
+    <span class="hide-on-small-only">GRACE Regional Groundwater Analyst</span>
+    <span class="show-on-small-only">GRACE</span>
+  </h1>
 
-  <div class="ml-auto flex items-center gap-2">
-    <button id="global-view-button" title="Animate the Whole World" aria-pressed="true"
-            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black ring-2 ring-transparent transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60 aria-pressed:bg-black/70 aria-pressed:text-white aria-pressed:ring-white/90">
+  <div class="nav-buttons">
+    <button id="global-view-button" class="icon-btn tooltip" data-tooltip="Animate the Whole World"
+            aria-label="Animate the Whole World" aria-pressed="true">
       <span data-icon="globe-americas" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="refresh-layers" title="Aquifer Scale View" aria-pressed="false"
-            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black ring-2 ring-transparent transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60 aria-pressed:bg-black/70 aria-pressed:text-white aria-pressed:ring-white/90">
+    <button id="refresh-layers" class="icon-btn tooltip" data-tooltip="Aquifer Scale View"
+            aria-label="Aquifer Scale View" aria-pressed="false">
       <span data-icon="map" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="upload-button" title="Upload GeoJSON"
-            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60">
+    <button id="upload-button" class="icon-btn tooltip" data-tooltip="Upload GeoJSON" aria-label="Upload GeoJSON">
       <span data-icon="arrow-up-tray" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="settings-button" title="Settings"
-            class="flex size-10 cursor-pointer items-center justify-center rounded-full bg-white/45 text-black transition hover:bg-white/70 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black/60">
+    <button id="settings-button" class="icon-btn tooltip" data-tooltip="Settings" aria-label="Settings">
       <span data-icon="cog-6-tooth" class="block size-6" aria-hidden="true"></span>
     </button>
   </div>
 
-  <!-- <div id="auth-action" class="flex shrink-0 items-center pl-2"></div> -->
+  <div id="auth-action" class="nav-auth"></div>
 </header>
 
 <div class="flex min-h-0 w-full flex-1 flex-col">
-  <arcgis-map id="aquifer-map" basemap="gray-vector" zoom="4" center="0,20"
-              class="min-h-0 w-full flex-1 border-b-2 border-black">
+  <arcgis-map id="aquifer-map" basemap="gray-vector" zoom="4" center="0,20" class="min-h-0 w-full flex-1 border-b-2 border-black">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
@@ -231,13 +230,13 @@
         <input type="checkbox" id="dynamic-scale-toggle" checked class="size-[18px] cursor-pointer accent-sky-700">
       </div>
       <p class="mb-3 text-[13px] text-neutral-600">When enabled, the color scale fits the actual min/max values in the
-        selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -30 to +30 cm.</p>
+                                                   selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -30 to +30 cm.</p>
     </div>
 
     <div class="mb-6">
       <h3 class="mb-3 text-base font-bold text-neutral-800">Cache</h3>
       <p class="mb-3 text-[13px] text-neutral-600">Delete all locally cached data (coordinates and the global
-        animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
+                                                   animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
       <div class="mb-3 flex items-center gap-3">
         <button id="clear-cache-button"
                 class="cursor-pointer rounded border border-red-800 bg-red-600 px-4 py-2 text-sm text-white transition hover:bg-red-800 disabled:cursor-default disabled:border-red-300 disabled:bg-red-300">
@@ -260,7 +259,7 @@
   <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">
     <h2 class="text-2xl font-bold text-neutral-900">Upload Polygon</h2>
     <p class="mb-3 text-[13px] text-neutral-600">Upload a GeoJSON file containing polygon geometries to analyze GRACE
-      groundwater data within the polygon boundary.</p>
+                                                 groundwater data within the polygon boundary.</p>
     <hr class="my-4 border-t border-neutral-300"/>
 
     <div id="upload-drop-zone"
