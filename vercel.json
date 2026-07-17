@@ -2,11 +2,5 @@
   "buildCommand": "npx vite build",
   "outputDirectory": "dist",
   "framework": null,
-  "installCommand": "npm install",
-  "git": {
-    "deploymentEnabled": {
-      "main": false,
-      "staging": false
-    }
-  }
+  "installCommand": "npm install"
 }
