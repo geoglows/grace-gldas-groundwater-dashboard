@@ -88,11 +88,17 @@ export function renderTimeseriesChart({container, dates, values, uncertainty, na
   for (let i = 0; i < dates.length; i++) {
     const y = values[i];
     if (!Number.isFinite(y)) continue;
-    line.push({x: dates[i], y});
+    // x MUST be a numeric timestamp, not a Date. `parsing: false` below tells
+    // Chart.js the data is already in the scale's internal format and skips the
+    // parse step that would otherwise convert a Date via the date adapter —
+    // leaving Date objects here makes the time scale's min/max come out NaN and
+    // silently renders an empty plot area.
+    const x = dates[i].getTime();
+    line.push({x, y});
     const unc = uncertainty?.[i];
     if (Number.isFinite(unc)) {
-      upper.push({x: dates[i], y: y + unc});
-      lower.push({x: dates[i], y: y - unc});
+      upper.push({x, y: y + unc});
+      lower.push({x, y: y - unc});
     }
   }
   const hasBand = upper.length > 0;
@@ -174,7 +180,13 @@ export function renderTimeseriesChart({container, dates, values, uncertainty, na
         y: {
           title: {display: true, text: "Liquid Water Equivalent (cm)", color: "#333", font: {size: 12}},
           ticks: {color: "#333"},
-          grid: {color: "rgba(0,0,0,0.06)"},
+          grid: {
+            // Zero is the reference every anomaly is read against, so its
+            // gridline is drawn as a solid black baseline rather than one more
+            // faint tick line.
+            color: (ctx) => (ctx.tick?.value === 0 ? "#000" : "rgba(0,0,0,0.06)"),
+            lineWidth: (ctx) => (ctx.tick?.value === 0 ? 2 : 1),
+          },
         },
       },
       plugins: {
@@ -199,7 +211,8 @@ export function renderTimeseriesChart({container, dates, values, uncertainty, na
 
   return {
     setMarker(date) {
-      chart.$timeMarker = date ?? null;
+      // Same rule as the dataset x values: the scale works in timestamps.
+      chart.$timeMarker = date == null ? null : date.getTime();
       chart.update("none");
     },
     destroy() {
