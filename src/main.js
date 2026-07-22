@@ -32,21 +32,22 @@ import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 
 import {get} from "zarrita";
 
-import Plotly from "plotly.js/lib/core";
-import Scatter from "plotly.js/lib/scatter";
-
 import {cellPolygonFromCenter} from "./cells.js";
+import {AQUIFERS_URL, PORTAL_URL, ZARR_URL} from "./config.js";
 import {clearCacheDB, getOrFetchCoords} from "./db.js";
-import {computeFrameStats, loadGlobalFrames} from "./globalData.js";
+import {loadGlobalVariable} from "./globalFramesClient.js";
 import {createGlobalRenderer} from "./globalLayer.js";
-import {createLinePlot, createUncertaintyBand} from "./helpers.js";
 import {hydrateIcons} from "./icons.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
+import {renderTimeseriesChart} from "./timeseriesChart.js";
 import {openZarrArray} from "./zarrStore.js";
 
-Plotly.register([Scatter]);
-
 hydrateIcons();  // heroicons
+
+// The portal link is the one URL in the markup that is a navigation target
+// rather than an asset, so Vite does not rewrite it for the base path. Patched
+// here (synchronously, before any await) from the configured portal URL.
+document.querySelector(".back-to-portal")?.setAttribute("href", PORTAL_URL);
 
 // The mapped variables. All live in the same zarr store with identical
 // shape/chunking/fill handling, so every read and render path is parameterized
@@ -119,13 +120,29 @@ const generateStops = () => {
   });
 };
 
-const zarrUrl = "https://d3hbj0z0f67zhd.cloudfront.net/ggg/grace-gldas-water-balance.zarr";
+// Which variables are downloaded eagerly at startup, each in its own worker.
+// The rest load on first selection. GWSa and TWSa are the two the toggle is
+// actually used for, so paying for both up front makes switching instant.
+const PREFETCH_VARIABLES = ["GWSa", "TWSa"];
+
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const sketchTool = document.getElementById("sketch-tool");
 const timeSlider = document.getElementById("time-slider");
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
 const appInstructions = timeseriesPlotDiv.innerHTML
+
+// The Chart.js instance currently occupying the timeseries panel, or null. Held
+// at module scope because the panel is torn down from several unrelated places
+// (entering the global view, resetting, a failed variable load); replacing its
+// innerHTML without destroying the chart would orphan a live Chart.js instance
+// along with its resize observer.
+let activeChart = null;
+const clearTimeseriesPanel = (html = "") => {
+  activeChart?.destroy();
+  activeChart = null;
+  timeseriesPlotDiv.innerHTML = html;
+};
 // Settings modal
 const settingsModal = document.getElementById("settings-modal");
 const borderToggle = document.getElementById("border-toggle");
@@ -136,10 +153,60 @@ const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 displayConfig.dynamicColorScale = dynamicScaleToggle.checked;
 displayConfig.showBorders = borderToggle.checked;
 
-const openArray = (name) => openZarrArray(zarrUrl, name);
+const openArray = (name) => openZarrArray(ZARR_URL, name);
 
-const coordsPromise = getOrFetchCoords({zarrUrl});
-const timeNode = await openArray("time");
+// ---- Lazily-loaded shared inputs -------------------------------------------
+// NOTHING in this module may sit at the top level behind `await`. A module with
+// a top-level await runs its whole body only after that await settles, so a
+// slow or failing network call would prevent the rest of the file — including
+// the arcgisViewReadyChange listener that wires up every button and starts the
+// initial load — from ever executing. That produced exactly the "map and
+// stylesheets render but the progress bar never appears and nothing recovers"
+// state: the app was structurally unable to reach its own bootstrap code.
+// Instead each shared input is a memoized promise that clears itself on
+// failure, so pressing the globe button retries it.
+
+let coordsPromise = null;
+const ensureCoords = () => {
+  coordsPromise ??= getOrFetchCoords({zarrUrl: ZARR_URL}).catch((err) => {
+    coordsPromise = null;
+    geoPromise = null;
+    throw err;
+  });
+  return coordsPromise;
+};
+
+// Grid origin derived from the coordinate arrays; needed by the renderer to
+// georeference the raster and by the workers to pick preview time steps.
+let geoPromise = null;
+const ensureGeo = () => {
+  geoPromise ??= ensureCoords().then(({lat, lon}) => {
+    const cellSize = lat.data[1] - lat.data[0];
+    return {cellSize, lat0: lat.data[0], lon0: lon.data[0], latEdgeMin: lat.data[0] - cellSize / 2};
+  });
+  return geoPromise;
+};
+
+// The shared time axis. `timeDates` is null until ensureTimeDates() resolves;
+// every caller that indexes it awaits that first.
+let timeDates = null;
+let timeDatesPromise = null;
+const ensureTimeDates = () => {
+  timeDatesPromise ??= (async () => {
+    const timeNode = await openArray("time");
+    const timeIntegers = await get(timeNode, [null]);
+    timeDates = Array.from(timeIntegers.data).map((t) => {
+      const baseDate = new Date(Date.UTC(2000, 0, 1)); // time units: days since 2000-01-01
+      baseDate.setUTCDate(baseDate.getUTCDate() + Number(t));
+      return baseDate;
+    });
+    return timeDates;
+  })().catch((err) => {
+    timeDatesPromise = null; // allow the globe button to retry
+    throw err;
+  });
+  return timeDatesPromise;
+};
 
 // Variable nodes are opened lazily and memoized: a variable listed in the
 // dropdown before its arrays exist in the store only errors when displayed.
@@ -165,15 +232,9 @@ const maskFill = (node, {data, shape, stride}) => {
   for (let i = 0; i < data.length; i++) out[i] = data[i] === fill ? NaN : data[i];
   return {data: out, shape, stride};
 };
-const timeIntegers = await get(timeNode, [null]);
-const timeDates = Array.from(timeIntegers.data).map((t) => {
-  const baseDate = new Date(Date.UTC(2000, 0, 1)); // time units: days since 2000-01-01
-  baseDate.setUTCDate(baseDate.getUTCDate() + Number(t));
-  return baseDate;
-});
 const boundaryLayer = new GeoJSONLayer({
   title: "Aquifer Boundaries",
-  url: new URL("/aquifers.geojson", import.meta.url).href,
+  url: AQUIFERS_URL,
   outFields: ["*"],
   definitionExpression: "1=1", // start with none selected
   renderer: {
@@ -268,10 +329,15 @@ const globalView = {
   active: false,
   runSeq: 0,       // bumped on every enter/exit so stale async runs abandon
   renderer: null,
-  gridVar: null,   // which variable's frames the renderer grid currently holds
+  // Which variable's COMPLETE frame series the renderer grid holds. A partial
+  // preview paint sets this back to null, because the grid then holds a single
+  // frame rather than the full time series and must be replaced before the
+  // time slider can drive it.
+  gridVar: null,
+  geo: null,       // {cellSize, lat0, lon0, latEdgeMin}, set once coords resolve
   // per-variable loads: varName -> {dataPromise, data: {frames, nT, nLat, nLon},
-  // stats: {validTimeIndices, suggestedMax}}; each variable is fetched and
-  // cached independently the first time it is displayed globally
+  // stats: {validTimeIndices, suggestedMax}}; each variable is downloaded in its
+  // own worker, independently of the others and of whichever one is displayed
   byVar: {}
 };
 
@@ -348,79 +414,69 @@ const updateMapLegend = () => {
 
 const setGlobalGrid = (varName) => {
   const entry = globalView.byVar[varName];
-  globalView.renderer.setGrid({...entry.data, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
+  const {latEdgeMin, cellSize} = globalView.geo;
+  globalView.renderer.setGrid({...entry.data, latEdgeMin, cellSize});
   globalView.gridVar = varName;
 };
 
 // Shown in the chart area when a selected variable can't be loaded — most
 // likely one listed in the dropdown ahead of its arrays landing in the store.
 const showVariableUnavailable = (varName) => {
-  timeseriesPlotDiv.innerHTML = `<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`;
+  clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`);
 };
 
-// While chunks stream in, preview the most recent month that already has data
-// at one of a few landmark land cells, so the world visibly fills in.
-const pickPreviewTimeStep = ({frames, nT, nLat, nLon}) => {
-  const spots = [[40.5, -99.5], [-4.5, -60.5], [25.5, 78.5], [48.5, 10.5]];
-  const cells = spots
-    .map(([la, lo]) => {
-      const row = Math.round((la - globalView.lat0) / globalView.cellSize);
-      const col = Math.round((lo - globalView.lon0) / globalView.cellSize);
-      return row >= 0 && row < nLat && col >= 0 && col < nLon ? row * nLon + col : -1;
-    })
-    .filter((i) => i >= 0);
-  const frameSize = nLat * nLon;
-  for (let t = nT - 1; t >= 0; t--) {
-    const base = t * frameSize;
-    if (cells.some((c) => frames[base + c] === frames[base + c])) return t;
-  }
-  return nT - 1;
+// Paint a partial world sent up by a still-downloading worker. The message
+// carries a single frame (~216 KB) rather than the whole series, so the grid is
+// installed with nT: 1 and gridVar is cleared — the full series replaces it when
+// the load finishes.
+const drawGlobalPreview = (varName, {frame, nLat, nLon}) => {
+  if (!globalView.active || displayConfig.variable !== varName || !globalView.renderer) return;
+  const {latEdgeMin, cellSize} = globalView.geo;
+  globalView.renderer.setStops(generateStops());
+  globalView.renderer.setGrid({frames: frame, nT: 1, nLat, nLon, latEdgeMin, cellSize});
+  globalView.gridVar = null;
+  globalView.renderer.drawFrame(0);
 };
 
+// Each variable gets its own worker, started on first request and memoized.
+// Loads are fully independent: a variable keeps downloading (and caching) if the
+// user toggles away mid-load, it just stops painting previews and driving the
+// progress bar, both of which follow whichever variable is currently displayed.
 const ensureGlobalData = (varName) => {
   const entry = (globalView.byVar[varName] ??= {});
   if (!entry.dataPromise) {
     entry.dataPromise = (async () => {
-      const {lat, lon} = await getOrFetchCoords({zarrUrl});
-      globalView.cellSize = lat.data[1] - lat.data[0];
-      globalView.lat0 = lat.data[0];
-      globalView.lon0 = lon.data[0];
-      globalView.latEdgeMin = lat.data[0] - globalView.cellSize / 2;
-
-      let lastPreviewAt = 0;
-      // dedicated node: the global loader wants opaque CORS errors confirmed
-      // twice before accepting a chunk as missing (it caches what it reads)
-      const node = await openZarrArray(zarrUrl, varName, {confirmOpaqueErrors: true});
-      const data = await loadGlobalFrames({
-        node,
+      globalView.geo = await ensureGeo();
+      const {frames, nT, nLat, nLon, fromCache, stats} = await loadGlobalVariable({
         varName,
-        zarrUrl,
-        onProgress: (fraction, partial) => {
-          // the load keeps running (and caches) if the user toggles away; it
-          // just stops painting previews for a variable no longer displayed
+        geo: globalView.geo,
+        onProgress: (fraction) => {
           if (!globalView.active || displayConfig.variable !== varName) return;
           updateGlobalProgress(fraction);
-          if (!partial || fraction >= 1) return;
-          const now = performance.now();
-          if (now - lastPreviewAt < 500) return;
-          lastPreviewAt = now;
-          if (globalView.gridVar !== varName) {
-            globalView.renderer.setStops(generateStops());
-            globalView.renderer.setGrid({...partial, latEdgeMin: globalView.latEdgeMin, cellSize: globalView.cellSize});
-            globalView.gridVar = varName;
-          }
-          globalView.renderer.drawFrame(pickPreviewTimeStep(partial));
-        }
+        },
+        onPreview: (preview) => drawGlobalPreview(varName, preview),
       });
-      entry.stats = computeFrameStats(data);
-      entry.data = data;
-      console.info(`Global ${varName} ready (${data.fromCache ? "from cache" : "from network"}): ${entry.stats.validTimeIndices.length}/${data.nT} months with data, dynamic color scale ±${entry.stats.suggestedMax} cm`);
+      entry.data = {frames, nT, nLat, nLon, fromCache};
+      entry.stats = stats;
+      console.info(`Global ${varName} ready (${fromCache ? "from cache" : "from network"}): ${stats.validTimeIndices.length}/${nT} months with data, dynamic color scale ±${stats.suggestedMax} cm`);
     })().catch((err) => {
       entry.dataPromise = null; // allow retry after a failure
       throw err;
     });
   }
   return entry.dataPromise;
+};
+
+// Kick off every prefetched variable at once, before and independently of the
+// map being ready to display any of them. Failures are logged rather than
+// surfaced here; the variable the user is actually looking at reports its own
+// failure through analyzeGlobalView's error path.
+const prefetchGlobalVariables = () => {
+  for (const varName of PREFETCH_VARIABLES) {
+    ensureGlobalData(varName).catch((err) => {
+      console.warn(`Background load of global ${varName} failed`, err);
+    });
+  }
 };
 
 // keepView: a GWSa/TWSa toggle inside the global view keeps the user's camera
@@ -443,7 +499,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   const possiblyExistingLayer = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
   timeSlider.widget?.stop();
-  timeseriesPlotDiv.innerHTML = "";
+  clearTimeseriesPanel();
   timeseriesPlotDiv.classList.add("hidden");
 
   const zoomPromise = keepView ? Promise.resolve() : arcgisMap.view.goTo({center: [0, 20], zoom: 4}).catch(() => {
@@ -454,11 +510,17 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
     arcgisMap.map.layers.add(globalView.renderer.layer, 0);
   }
 
+  // Show the progress bar BEFORE awaiting anything, so the very first paint of
+  // the app already tells the user something is downloading.
   if (!globalView.byVar[varName]?.data) {
     globalProgressDiv.classList.remove("hidden");
     updateGlobalProgress(0);
   }
   try {
+    // The time axis is a separate small read that the slider needs; awaiting it
+    // here (rather than at module scope) keeps a failure recoverable.
+    await ensureTimeDates();
+    if (globalView.runSeq !== runId || !globalView.active) return;
     await ensureGlobalData(varName);
   } catch (err) {
     console.error(`Failed to load the global ${varName} dataset`, err);
@@ -527,7 +589,8 @@ const main = async ({polygon, zoomPromise}) => {
   exitGlobalView();
   const runId = ++analysisRunSeq;
   regionalVariableHandler = null; // reinstalled once this run's data is ready
-  const {lat, lon} = await coordsPromise;
+  await ensureTimeDates();
+  const {lat, lon} = await ensureCoords();
   await arcgisMap.map.when();
   await arcgisMap.view.when();
   const cellSize = lat.data[1] - lat.data[0]; // ~0.25
@@ -647,78 +710,16 @@ const main = async ({polygon, zoomPromise}) => {
     const varName = displayConfig.variable;
     const {short, longName} = VARIABLES[varName];
     const d = varData[varName];
-    timeseriesPlotDiv.innerHTML = "";
-    // uncertainty band (when the store has a <var>_unc array) and line
-    const traces = [];
-    if (d.uncMeanSeries) traces.push(createUncertaintyBand({x: timeDates, yArray: d.meanSeries, uncertaintyArray: d.uncMeanSeries, color: "rgba(28,110,236,0.25)", name: short}));
-    traces.push(createLinePlot({x: timeDates, y: d.meanSeries, color: "#1c6eec", name: short, uncertainty: d.uncMeanSeries}));
-    Plotly.newPlot(
-      timeseriesPlotDiv,
-      traces,
-      {
-        title: {text: `${longName} Time Series${d.uncMeanSeries ? " and Uncertainty" : ""}`, font: {size: 14, color: "#333"}, y: 0.97, yanchor: "top"},
-        xaxis: {title: {text: "Time", font: {size: 12, color: "#333"}}, automargin: true},
-        yaxis: {title: {text: "Liquid Water Equivalent (cm)", font: {size: 12, color: "#333"}}, automargin: true},
-        showlegend: false,
-        dragmode: false,  // disable click-and-drag zoom/pan on the plot area
-      },
-      {
-        responsive: true,
-        toImageButtonOptions: {
-          format: "png",
-          filename: `grace_${varName.toLowerCase()}_timeseries`,
-          height: 600,
-          width: 1200,
-          scale: 2
-        },
-        modeBarButtonsToAdd: [
-          {
-            name: "Download CSV",
-            icon: Plotly.Icons.disk,
-            click: function (gd) {
-              // Line traces carry the center value (y) and per-point uncertainty
-              // (customdata); upper/lower are derived from those.
-              const lineTraces = gd.data.filter(t => t.mode === "lines");
-
-              const dates = lineTraces[0]?.x || [];
-
-              // Build headers: Date, then for each series: value, upper, lower
-              const headers = ["Date"];
-              lineTraces.forEach(t => {
-                headers.push(t.name, `${t.name}_upper`, `${t.name}_lower`);
-              });
-
-              // Build rows
-              const rows = dates.map((date, i) => {
-                const dateStr = new Date(date).toISOString().split("T")[0];
-                const values = [dateStr];
-
-                lineTraces.forEach((lineTrace) => {
-                  const center = lineTrace.y[i];
-                  const unc = lineTrace.customdata?.[i];
-                  const centerVal = Number.isFinite(center) ? center : "";
-                  const hasBand = centerVal !== "" && Number.isFinite(unc);
-                  const upperVal = hasBand ? center + unc : "";
-                  const lowerVal = hasBand ? center - unc : "";
-                  values.push(centerVal, upperVal, lowerVal);
-                });
-
-                return values.join(",");
-              });
-
-              const csv = [headers.join(","), ...rows].join("\n");
-              const blob = new Blob([csv], {type: "text/csv"});
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = `grace_${varName.toLowerCase()}_data.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }
-          }
-        ]
-      }
-    );
+    activeChart?.destroy();
+    activeChart = renderTimeseriesChart({
+      container: timeseriesPlotDiv,
+      dates: timeDates,
+      values: d.meanSeries,
+      uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
+      name: short,
+      longName,
+      fileStem: `grace_${varName.toLowerCase()}`,
+    });
   };
 
   // ---- Create the cell source; `anomaly` carries whichever variable is displayed ----
@@ -818,21 +819,7 @@ const main = async ({polygon, zoomPromise}) => {
 
       await anomalyLayer.applyEdits({updateFeatures});
 
-      Plotly
-        .relayout(
-          timeseriesPlotDiv,
-          {
-            shapes: [{
-              type: "line",
-              x0: timeDates[timeStep],
-              x1: timeDates[timeStep],
-              y0: 0,
-              y1: 1,
-              yref: "paper",
-              line: {color: "red", width: 2, dash: "dot"}
-            }]
-          }
-        );
+      activeChart?.setMarker(timeDates[timeStep]);
     }).catch(console.error);
   };
 
@@ -847,7 +834,7 @@ const main = async ({polygon, zoomPromise}) => {
   const renderVariable = async ({keepSlider}) => {
     const varName = displayConfig.variable;
     if (!varData[varName]) {
-      timeseriesPlotDiv.innerHTML = `<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">Loading ${VARIABLES[varName].longName}&hellip;</div>`;
+      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">Loading ${VARIABLES[varName].longName}&hellip;</div>`);
     }
     let d;
     try {
@@ -888,7 +875,7 @@ const resetLayers = () => {
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   arcgisMap.view.goTo(boundaryLayer.fullExtent);
   timeSlider.widget?.stop();
-  timeseriesPlotDiv.innerHTML = appInstructions;
+  clearTimeseriesPanel(appInstructions);
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
 }
@@ -908,7 +895,24 @@ const halfZoomLODs = Array.from({length: 47}, (_, i) => ({
   resolution: BASE_RESOLUTION / Math.pow(HALF_STEP, i),
 }));
 
-arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
+// Start both prefetched variables downloading right now, in their own workers.
+// This deliberately does NOT wait for the map: the zarr download and the ArcGIS
+// view initialization are independent, so overlapping them saves several
+// seconds, and a map that never becomes ready no longer means data that never
+// starts loading.
+prefetchGlobalVariables();
+
+// Everything that wires up the UI lives here, and it must run exactly once —
+// but it is a race whether the map's view is ready before or after this module
+// finishes executing. `arcgisViewReadyChange` is a one-shot event in practice,
+// so a listener registered after it already fired would never run and the app
+// would sit forever with a rendered map, no progress bar, and no working
+// buttons. Guarding with `arcgisMap.ready` and de-duplicating with `booted`
+// covers both orderings.
+let booted = false;
+const bootMapUi = async () => {
+  if (booted) return;
+  booted = true;
   await arcgisMap.map.when();
   await arcgisMap.view.when()
   arcgisMap.view.constraints = {lods: halfZoomLODs, snapToZoom: true};
@@ -1192,4 +1196,13 @@ arcgisMap.addEventListener("arcgisViewReadyChange", async () => {
       uploadSubmit.textContent = "Analyze";
     }
   });
+};
+
+arcgisMap.addEventListener("arcgisViewReadyChange", () => {
+  if (arcgisMap.ready === false) return; // also fires when a view is torn down
+  bootMapUi().catch((err) => console.error("Failed to initialize the map UI", err));
 });
+// The event may already have fired while this module was still evaluating.
+if (arcgisMap.ready) {
+  bootMapUi().catch((err) => console.error("Failed to initialize the map UI", err));
+}

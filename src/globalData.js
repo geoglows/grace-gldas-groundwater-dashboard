@@ -3,12 +3,17 @@ import {get} from "zarrita";
 import {idbGet, idbPut} from "./db.js";
 
 // The zarr stores are chunked [fullTime, y, x] so any global read must touch
-// every spatial chunk. Chunks are fetched individually through a small worker
+// every spatial chunk. Chunks are fetched individually through a small fetch
 // pool so we can report progress, paint the map as regions arrive, and retry
 // transient failures. Values are packed into one time-major Float32Array
 // (frame t is the contiguous slice [t*nLat*nLon, (t+1)*nLat*nLon)) which is
 // what the per-frame colorizer wants, then cached in IndexedDB so repeat
 // visits skip the network entirely.
+//
+// Everything in this module runs inside a Web Worker (globalFrames.worker.js):
+// the fetch pool, the int16 -> Float32 unpack loops, and computeFrameStats' full
+// pass over ~50M values would otherwise stall the map's render loop for seconds
+// at a time. Nothing here may touch the DOM.
 const FETCH_POOL_SIZE = 6;
 const FETCH_RETRIES = 6;
 
@@ -142,6 +147,27 @@ export async function loadGlobalFrames({node, varName, zarrUrl, onProgress}) {
   }
 
   return {frames, nT, nLat, nLon, fromCache: false};
+}
+
+// While chunks stream in, preview the most recent month that already has data
+// at one of a few landmark land cells, so the world visibly fills in. `geo`
+// carries the grid origin (lat0/lon0/cellSize) so the landmark lat/lons can be
+// turned into row/column indices.
+export function pickPreviewTimeStep({frames, nT, nLat, nLon}, geo) {
+  const spots = [[40.5, -99.5], [-4.5, -60.5], [25.5, 78.5], [48.5, 10.5]];
+  const cells = spots
+    .map(([la, lo]) => {
+      const row = Math.round((la - geo.lat0) / geo.cellSize);
+      const col = Math.round((lo - geo.lon0) / geo.cellSize);
+      return row >= 0 && row < nLat && col >= 0 && col < nLon ? row * nLon + col : -1;
+    })
+    .filter((i) => i >= 0);
+  const frameSize = nLat * nLon;
+  for (let t = nT - 1; t >= 0; t--) {
+    const base = t * frameSize;
+    if (cells.some((c) => frames[base + c] === frames[base + c])) return t;
+  }
+  return nT - 1;
 }
 
 // One pass over the data: which time steps have any data at all (GRACE has

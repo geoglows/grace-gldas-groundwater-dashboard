@@ -13,13 +13,43 @@
     width: 100%;
 }
 
-.modebar-btn {
-    padding: 6px !important;
+/* ------------------------------------------------------------------ *
+ * Time series chart (Chart.js). The chart canvas must size to the flex
+ * row that holds it, so the wrapper is a positioning context and the
+ * canvas box fills it absolutely — a plain block canvas with
+ * maintainAspectRatio:false would otherwise grow without bound.
+ * ------------------------------------------------------------------ */
+.ts-chart {
+    position: relative;
+    height: 100%;
+    width: 100%;
 }
 
-.modebar-btn svg {
-    width: 24px !important;
-    height: 24px !important;
+.ts-chart-canvas {
+    position: absolute;
+    inset: 0;
+    padding: 4px 8px 4px 4px;
+}
+
+.ts-download {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 1;
+    cursor: pointer;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #334155;
+    transition: background 0.15s ease;
+}
+
+.ts-download:hover,
+.ts-download:focus-visible {
+    background: #e2e8f0;
+    outline: none;
 }
 
 /* ------------------------------------------------------------------ *
