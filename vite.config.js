@@ -42,6 +42,34 @@ export default defineConfig(({mode, command}) => {
   return {
     base,
     plugins: [tailwindcss()],
+    build: {
+      // The ArcGIS SDK explodes into ~1300 tiny ES modules. Vite's default
+      // behavior injects a <link rel="modulepreload"> for the entire entry
+      // import graph (~465 tags), so the browser fires ~465 concurrent HTTP/2
+      // requests at the CDN the instant it parses <head> — before the app even
+      // runs. That synchronized avalanche over a single connection trips
+      // CloudFront's per-connection concurrency limit, which answers 503 for a
+      // large fraction of them (the browser reports net::ERR_ABORTED 503). The
+      // same requests spread across separate connections never fail.
+      //
+      // Two mitigations, together:
+      //  1. modulePreload.polyfill stays but we cap the preload avalanche by
+      //     dropping the blanket preload — modules load as imports resolve.
+      //  2. manualChunks consolidates vendor code into a handful of larger
+      //     chunks so there are far fewer requests to begin with.
+      modulePreload: false,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('@arcgis') || id.includes('@esri')) return 'arcgis';
+            if (id.includes('zarrita') || id.includes('numcodecs')) return 'zarr';
+            if (id.includes('chart.js') || id.includes('date-fns')) return 'charts';
+            return 'vendor';
+          },
+        },
+      },
+    },
     define: {
       global: 'globalThis',
     },
