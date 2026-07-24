@@ -1,4 +1,4 @@
-name: Trigger Vercel deploy
+name: Deploy to Vercel
 on:
   push:
     branches: [main, staging]
@@ -11,19 +11,32 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
-      - name: Fire Vercel Deploy Hook
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
-          VERCEL_STAGING_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_STAGING_DEPLOY_HOOK_URL }}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy production
+        if: github.ref == 'refs/heads/main'
         run: |
-          case "${GITHUB_REF_NAME}" in
-            main) HOOK="${VERCEL_DEPLOY_HOOK_URL}" ;;
-            staging) HOOK="${VERCEL_STAGING_DEPLOY_HOOK_URL}" ;;
-            *) echo "No deploy hook configured for branch ${GITHUB_REF_NAME}." >&2; exit 1 ;;
-          esac
-          if [ -z "${HOOK}" ]; then
-            echo "Deploy hook URL for ${GITHUB_REF_NAME} is not set." >&2
-            exit 1
-          fi
-          curl -fsS -X POST "${HOOK}"
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy staging
+        if: github.ref == 'refs/heads/staging'
+        run: |
+          vercel pull --yes --environment=staging --token="$VERCEL_TOKEN"
+          vercel build --target=staging --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --target=staging --token="$VERCEL_TOKEN"
