@@ -14,31 +14,29 @@ jobs:
     env:
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
       - name: Checkout
-        if: github.ref == 'refs/heads/main'
         uses: actions/checkout@v4
 
       - name: Setup Node
-        if: github.ref == 'refs/heads/main'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Deploy production to Vercel
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy production
         if: github.ref == 'refs/heads/main'
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          npm install -g vercel
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
           vercel build --prod --token="$VERCEL_TOKEN"
           vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
 
-      - name: Deploy staging via hook
+      - name: Deploy staging
         if: github.ref == 'refs/heads/staging'
-        env:
-          STAGING_HOOK: ${{ secrets.VERCEL_STAGING_DEPLOY_HOOK_URL }}
         run: |
-          test -n "$STAGING_HOOK" || { echo "staging hook not set" >&2; exit 1; }
-          curl -fsS -X POST "$STAGING_HOOK"
+          vercel pull --yes --environment=staging --token="$VERCEL_TOKEN"
+          vercel build --target=staging --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --target=staging --token="$VERCEL_TOKEN"
